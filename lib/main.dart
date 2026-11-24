@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -68,34 +70,6 @@ class _MajorExpressAppState extends State<MajorExpressApp> {
   }
 }
 
-class MajorLogEntry {
-  final String company;
-  final String firm;
-  final String details;
-  final String time;
-
-  MajorLogEntry({
-    required this.company,
-    required this.firm,
-    required this.details,
-    required this.time,
-  });
-
-  Map<String, dynamic> toJson() => {
-        'company': company,
-        'firm': firm,
-        'details': details,
-        'time': time,
-      };
-
-  factory MajorLogEntry.fromJson(Map<String, dynamic> json) => MajorLogEntry(
-        company: json['company']?.toString() ?? '',
-        firm: json['firm']?.toString() ?? '',
-        details: json['details']?.toString() ?? '',
-        time: json['time']?.toString() ?? '',
-      );
-}
-
 class MajorWorkspaceScreen extends StatefulWidget {
   final bool isDark;
   final VoidCallback onToggleTheme;
@@ -111,49 +85,85 @@ class MajorWorkspaceScreen extends StatefulWidget {
 }
 
 class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
-  // 0 = Электроконнект, 1 = Печатные платы, 2 = Журнал
-  int _selectedTab = 0;
+  // 0 = Электроконнект, 1 = Печатные платы, 2 = Треки и копирование
+  int _selectedNav = 0;
   bool _sumatraFound = false;
+  Timer? _tracksWatcherTimer;
 
   // Электроконнект
   final TextEditingController _majorFirmController = TextEditingController();
   final TextEditingController _majorDateController = TextEditingController();
   final TextEditingController _majorTimeController =
-      TextEditingController(text: '10:00-14:00');
+      TextEditingController(text: '14:00-18:00');
   final TextEditingController _majorWeightController =
       TextEditingController(text: '1');
   final TextEditingController _majorPlacesController =
       TextEditingController(text: '1');
   final TextEditingController _majorDescController =
-      TextEditingController(text: 'Документы');
-  final TextEditingController _majorInfoController = TextEditingController();
+      TextEditingController(text: 'платы');
+  final TextEditingController _majorInfoController =
+      TextEditingController(text: 'УПД');
   final TextEditingController _majorFirmSearchController =
       TextEditingController();
   String _majorFirmFilter = '';
   List<String> _electroFirms = [];
-  String _lastMajorAction = 'Готов к оформлению';
 
   // Печатные платы
   final TextEditingController _platyFirmController = TextEditingController();
   final TextEditingController _platyDateController = TextEditingController();
   final TextEditingController _platyTimeController =
-      TextEditingController(text: '10:00-14:00');
+      TextEditingController(text: '14:00-18:00');
   final TextEditingController _platyWeightController =
       TextEditingController(text: '1');
   final TextEditingController _platyPlacesController =
       TextEditingController(text: '1');
   final TextEditingController _platyDescController =
-      TextEditingController(text: 'Платы');
-  final TextEditingController _platyInfoController = TextEditingController();
+      TextEditingController(text: 'платы');
+  final TextEditingController _platyInfoController =
+      TextEditingController(text: 'УПД');
   final TextEditingController _platyFirmSearchController =
       TextEditingController();
   String _platyFirmFilter = '';
   List<String> _platyFirms = [];
-  String _lastPlatyAction = 'Готов к оформлению';
 
-  List<MajorLogEntry> _logs = [];
+  // Список выписанных треков (формат: "Фирма Трек")
+  List<String> _trackLines = [];
 
   static const List<String> _defaultElectroFirms = [
+    'Судариков Петр Сергеевич',
+    'ООО "ПТК "ЭДС"',
+    'ООО "Сверх"',
+    'Стародубцев Сергей Юрьевич',
+    'ООО "ИТЭЛМА"',
+    'ООО "Галс плюс"',
+    'ООО "ЯМАТО СКЕЙЛ"',
+    'АО "АНГСТРЕМ-ТЕЛЕКОМ"',
+    'ООО "НПО "ОРК"',
+    'АО "Группа Кремний Эл" Пронин Андрей',
+    'ИП Роднов Константин Сергеевич',
+    'ООО "СМИТ"',
+    'ООО "Завод "Промприбор"',
+    'ООО "КУБОМЕТР СВЕТА"',
+    'ИП Усынин Кирилл Германович',
+    'Кузавов Андрей Петрович',
+    'ООО "Агрегатор"',
+    'АО "МЗ"САПФИР" Балагур Евгений',
+    'АО "МЗ"САПФИР" Максим Кондрашов',
+    'ООО "ТПК "ВАРТОН"',
+    'Ермаков Василий Игоревич',
+    'Мышко Иван Игоревич',
+    'ООО "ТЕПЛОМАРКЕТ"',
+    'ООО "АРС" Иванов Алексей',
+    'ООО "Пульс Электрик"',
+    'ООО "ЦИФРОВАЯ НЕЗАВИСИМОСТЬ"',
+    'ООО "ПРОТОН+"',
+    'ООО "НИЦ Промышленная оптика"',
+    'АО "МПОТК "ТЕХНОКОМПЛЕКТ"',
+    'ООО "АНИМА ТРЕЙД"',
+    'АО "Конструкторское бюро "Кунцево"',
+    'ООО "Остек-Электро" Моргунова Ольга',
+    'ООО "Остек-Электро" Мелянченко Сергей',
+    'ООО "Нейрософт"',
     'ООО "РУТСТЕР"',
     'ООО "СТК"',
     'АО "Концерн Вега"',
@@ -169,8 +179,11 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
     'ООО " НПК ИСКРА"',
     'ООО " Международный центр квантовой оптики',
     'ООО "Электроконнект"',
+    'ООО "Электроконнект" завод',
+    'ООО "Электроконнект" ЗАВОД',
     'ООО "ДИСТАНЦИЯ"',
     'АО "Мостком"',
+    'ИП Лебедев Олег Александрович',
     'ООО "АТС Т"',
     'ООО "ПЛ ИНЖИНИРИНГ"',
     'АНО " Школа 21"',
@@ -179,6 +192,7 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
     'ООО "Дельта Солюшнс"',
     'Упак-Лайнер',
     'ООО "Олл ин пром"',
+    'ИП Гулин Станислав Евгеньевич',
     'АО "Научно-производственное "Рязаньприбор"',
     'АО"ГЗАС им Попова"',
     'ООО "Корд-группа"',
@@ -188,26 +202,35 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
     'ООО «АВТОМАТИКА плюс»',
     'Гидравлические Комплексные Системы',
     'ООО "РТЦ"',
+    'ООО" Грош Торг"',
     'АО "ИНФОРМТЕХНИКА И СВЯЗЬ"',
     'ООО "НПО "ОРИГИНАЛЬНЫЕ РУССКИЕ КОНТРОЛЛЕРЫ"',
     'ООО "Деко-сервис"',
+    'ИП Рухлов Дмитрий Сергеевич',
+    'ООО"Натшелл"',
     'АО "НПО "Радиозавод им. А.С.Попова"',
+    'ООО "Ателье Гончарова"',
     'АО "Электромеханика"',
     'ООО "РЭСТОК"',
     'ООО "МикроЭМ Технологии"',
     'ООО "Декаст"',
     'ООО "Технологии Света"',
     'АО ПФ "ЭЛВИРА"',
+    'ООО "Гемодженикс"',
     'ООО "Комито"',
     'ООО "НПО "Вольт инжиниринг"',
     'ООО "Ревотех"',
     'ООО "Орион-Р"',
     'ООО "Трансаммиак"',
     'ООО "Промприбор-Р"',
-    'ООО "Галсплюс"',
     'ООО НПО "Грань"',
+    'ИП Козин Дмитрий Владимирович',
+    'ООО "Нетстелл"',
     'ООО "ТИОН"',
+    'ИП Отчерцов Андрей Владимирович',
+    'ИП Румянцев Андрей Александрович',
     'АО "РНТ"',
+    'Бриз-Ал документы',
     'ООО "РТК-Технологии"',
     'ООО "Мотив НТ"',
     'ООО ПКФ "Экс-Форма"',
@@ -236,6 +259,9 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
     'ПАО "Вектор"',
     'ООО НПФ "Радиосервис"',
     'МФТИ, ФИЗТЕХ',
+    'ИП Рыбкина Светлана Александровна',
+    'ООО "Парк Чудес"',
+    'ПАКС',
     'ООО "Радиотехнологии"',
     'ООО "Эмеральд Экотехнологии"',
     'ООО "Лаборатория электроприводов "АДАПТТО"',
@@ -256,6 +282,7 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
     'ООО "Три точки мануфактуринг"',
     'ООО "Неовэлл"',
     'ООО "СГ-Терм"',
+    'ИП Громов Андрей Васильевич',
     'ООО "ИРЗ"',
     'ООО "Динакор Силовые Технологии"',
     'ООО "ТД "Энергостандарт"',
@@ -277,230 +304,205 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
     'АО "НПО "Орион"',
     'АО "Лаборатория Электроники"',
     'АО "ОДК"',
+    'ООО "Хьюман Филмс"',
+    'ИП Кузьменко Лариса Юрьевна',
     'АО НПЦ "ЭЛВИС"',
     'ООО "Дантекс Рус"',
     'ООО "САУК"',
     'ООО "НТР"',
-    'АО "Микрон"',
-    'АО "ЭЗАН"',
-    'АО НПП "Пульсар"',
-    'АО "Плазма"',
+    'ООО "Вектор Электроника"',
+    'ООО"Сварог"',
+    'ООО "Эван"',
+    'АО "ЭЛЕКТРУМ АВ"',
+    'АО "Тулаэлектропривод"',
+    'ООО "Компания "Объединенная энергия"',
   ];
 
   static const List<String> _defaultPlatyFirms = [
-    '18 ЦНИИ МО РФ МГУП',
-    'OOO "АПС"',
-    'Агарков Алексей Сергеевич',
-    'Антон Киструга',
-    'АО " Гирооптика"',
-    'АО " Горизонт"',
-    'АО " НИИАО"',
-    'АО "766 УПТК"',
-    'АО "АВЭКС"',
-    'АО "АЛМАЗ"',
-    'АО "Бета ир"',
-    'АО "Вибратор"',
-    'АО "ГНПП "Регион"',
-    'АО "ДМЗ" им. Н.П. Федорова',
-    'АО "Завод Кризо"',
-    'АО "ЗАВОД" ЭЛЕКТРОМАШ"',
-    'АО "КБТочмаш им. А.Э. Нудельмана"',
-    'АО "КИПЗ"',
-    'АО "КОБРА"',
-    'АО "Концерн Вега"',
-    'АО "Корпарация "Внииэм"',
-    'АО "Корпорация "ВНИИЭМ"',
-    'АО "Корпорация "Фазотрон-НИИР"',
-    'АО "Красный гидропресс"',
-    'АО "КЭТЗ"',
-    'АО "МОРИНСИС-АГАТ-КИП"',
-    'АО "МПОТК"Технокомплект"',
-    'АО "НАНОТРОНИКА"',
-    'АО "НИИ "КУЛОН"',
-    'АО "НИИ "Октава"',
-    'АО "НИИ "Полюс" им.М.Ф.Стельм',
-    'АО "НИИ "ЭЛПА"',
-    'АО "НИИ КП"',
-    'АО "НИИ Проблем Автоматизации "Северэвмкомплекс"',
-    'АО "НИИИ',
-    'АО "НИИИТ-Опытный завод"',
-    'АО "НИИИТ-РК"',
-    'АО "НИИМЭ"',
-    'АО "НИИПП"',
-    'АО "НИИЭМ"',
-    'АО "НПК "СПП"',
-    'АО "НПО "КИС"',
-    'АО "НПО "ОРИОН"',
-    'АО "НПО "РусБИТех"',
-    'АО "НПО "РЯЗАНЬПРИБОР"',
-    'АО "НПП "КРАСНОЗНАМЁНЕЦ"',
-    'АО "НПП "Пульсар"',
-    'АО "НПП" РЕАКОНТ"',
-    'АО "НПП"Геофизика-Космос',
-    'АО "НПФ "Микран"',
-    'АО "НПЦ" "АСПЕКТ"',
-    'АО "НТП "АВИАТЕСТ"',
-    'АО "НЦ ПЭ"',
-    'АО "Обуховское"',
-    'АО "ОДК"',
-    'АО "ОКБ МЭИ"',
-    'АО "Плазма"',
-    'АО "ПО "СЕВЕР"',
-    'АО "ПО "СЕВЕР" Михеев',
-    'АО "Радиозавод"',
-    'АО "РПЗ"',
-    'АО "Рязанский радиозавод"',
-    'АО "Серпуховский Завод "Металлист"',
-    'АО "СПС"',
-    'АО "СУП"',
-    'АО "ТехПромИмпорт"',
-    'АО "Трансмаш"',
-    'АО "Уральские Заводы"',
     'АО "ЦНИИ "Буревестник"',
-    'АО "ЦНИИ "Волна"',
-    'АО "Цнииаг"',
-    'АО "ЦНИТИ "Техномаш"',
-    'АО "ЭВРИКА"',
-    'АО "ЭЗАН"',
+    'ООО "ФИНКО"',
+    'Владимир Бузовский',
+    'ООО "СТС"',
+    'АО"ГЗАС им Попова"',
+    'Гетман Максим',
+    'Сколковский институт науки и технологий Сколтех',
+    'ООО "Синвайтес Инжиниринг"',
+    'ООО СТС',
+    'АО "ОКБ МЭИ"',
+    'Калугаприбор',
+    'АО "НИИМЭ"',
+    'ООО "Сен-Гобен"',
+    'ПП Минск',
+    'ООО"КТЦ КЭБ"',
+    'АО НПП ЦИФРОВЫЕ РЕШЕНИЯ',
+    'МФТИ, ФИЗТЕХ',
+    'ГАЗ-СИСТЕМА-СЕРВИС АО НПФ',
+    'Документы ИАиЭ СО РАН',
+    'Валерий Белоусов',
+    'ЗАО НПП "Система"',
+    'Сумин Евгений',
+    'Ольга',
+    'Черепанов Дмитрий',
+    'Спирчагов Алексей Евгеньевич',
+    'АО "НИИ "ЭЛПА"',
+    'Черникова Ольга',
+    'АО ПО "СЕВЕР"',
+    'АО "ЭЗАН" ПП!!!',
+    'УФК М.О (ИБП РАН)',
+    'Документы в Интеррус',
+    'Тепляков Пётр',
     'АО "ЭПМ"',
-    'АО "ЭРА Марин"',
-    'АО «ЗАВОД «ФИОЛЕНТ»',
+    'АО НИЦ "РЕЗОНАНС"',
+    'ФГУП"ВНИИА"',
+    'Валентин Дерябкин',
+    'АО "НПО "РЯЗАНЬПРИБОР"',
+    'Павел Титов',
+    'Ленар Гимадиев',
+    'ЗАО "ЭРАСИБ"',
+    'эрасиб',
+    'АО "ОДК"',
+    'Ярыгин Александр Юрьевич',
+    'АО "НПО "Орион"',
+    'Козьменко Светлана Васильевна',
+    'ЮРГПУ (НПИ)',
+    'ЖЗЛ-Сервис',
+    'Документы РусБИТех',
+    'ЗАО "Полимерфильтр"',
+    'ИПМТ ДВО РАН',
+    'АО "Завод "Варяг-Техсервис"',
+    'Блохина Ирина Валерьевна',
+    'Валерий',
+    'ООО "НЭК"',
+    'Рощин Мстислав Александрович',
+    'АО "НИИ "КУЛОН"',
+    'АО "ЗАВОД" ЭЛЕКТРОМАШ"',
+    'АО"КЗТМ"',
+    'Филиал ИФП СО РАН "КТИПМ"',
+    'ООО "НТП "Энергоконтроль"',
+    'ОАО "Егоршинский радиозавод"',
+    'АО "НПП "Пульсар"',
+    'ООО "Рембаза"',
+    'Ф+ тек Берсенева Ксения',
+    'ООО "Джусто"',
+    'ООО "РТС-БИТ"',
+    'АО "766 УПТК"',
     'АО «НИИ НПО «ЛУЧ»',
+    'АО "СПС"',
+    'ООО "МГ-СЕРВИС"',
+    'АО "Плазма"',
+    'ООО "НИЦ СЭ И НК"',
+    'АО "НПП"Геофизика-Космос',
     'АО «РДТ-Темп»',
-    'АО «РЗП»',
+    'АО "Радиозавод"',
+    'ФГУП "Крыловский государственный научный центр"',
+    'ООО "ОПТИМАЛЬНАЯ ФАБРИКА"',
+    'АО "НИИЭМ"',
+    'ООО "Тир Строй Монтаж"',
+    'ПАО "НПП "Импульс"',
+    'АО "Уральские Заводы"',
+    'ОП "НИИ АЭМ ТУСУР"',
+    'Доки_Завод',
+    'ООО "Компания "Объединенная энергия"',
+    'АО "РПЗ"',
+    'ПАО ПЗ "Сигнал"',
+    'АО "Корпорация "Фазотрон-НИИР"',
+    'АО "АЛМАЗ"',
+    'АО "ЦНИТИ "Техномаш"',
+    'Приходько Сергей Викторович',
+    'Самарский университет',
+    'АО "НПП" РЕАКОНТ"',
+    'АО "КБТочмаш им. А.Э. Нудельмана"',
+    'ООО НППГА"ЛУЧ"',
+    'АО "НПО "РусБИТех"',
+    'АО "НПК "СПП"',
+    'ОАО "Завод Электросигнал"',
+    'ЮФУ, ЮФУ ЮЖНЫЙ ФЕДЕРАЛЬНЫЙ УНИВЕРСИТЕТ, ФГАОУ ВО',
+    'ОАО "ПЯТИГОРСКИЙ ЗАВОД "ИМПУЛЬС"',
+    'АО "НЦ ПЭ"',
+    'АО "НТП "АВИАТЕСТ"',
+    'ПАО "НПО "Алмаз"',
+    'ООО "Электроконнект"',
+    'РусБитех',
+    'АО "НПП "КРАСНОЗНАМЁНЕЦ"',
+    '18 ЦНИИ МО РФ МГУП',
+    'АО "ЭВРИКА"',
+    'ООО "ТПС"',
+    'ООО "ПКФ ПОЛЁТ"',
+    'АО "ЭРА Марин"',
+    'АО "НПЦ" "АСПЕКТ"',
+    'АО "Трансмаш"',
+    'АО ВП "ЭРА"',
+    'АО "Красный гидропресс"',
+    'ООО "Наутилус"',
+    'АО "ГНПП "Регион"',
+    'ФГУП МОКБ "Марс"',
+    'ЗАО "КоМЭНС"',
+    'АО НИИПП',
+    'ПАО НПО "Наука"',
+    'АО "КИПЗ"',
+    'АО "КЭТЗ"',
+    'АО "Цнииаг"',
+    'АО "КОБРА"',
+    'АО Системы управления и приборы',
+    'АО "Корпарация "Внииэм"',
+    'АО "ЦНИИ "Волна"',
+    'ОАО "НПП КП "Квант"',
+    'АО "Обуховское"',
+    'НП ЗАО "РЭКО-ВЕК"',
+    'АО "АВЭКС"',
+    'ПАО"Саратовский электроприборостроительный з-д им.',
+    'ПАО "РЕАТОН"',
+    'ООО «ЛЭМЗ-Т»',
+    'АО "НИИПП"',
+    'ООО "УРАРТУ"',
+    'АО "Бета ир"',
+    'АО "НИИ "Октава"',
+    'ООО"РАДАРАВИАСЕРВИС"',
+    'Шарапов Вадим',
+    'АО "НИИТС"Синвент"',
+    'ООО "БОРЕЙ"',
+    'Беленькая Татьяна Ивановна',
+    'ООО "Нейрософт"',
+    'АО «ЗАВОД «ФИОЛЕНТ»',
+    'ФГУП "ВНИИФТРИ"',
+    'АО "КРАСНЫЙ ГИДРОПРЕСС"',
+    'ООО "ИНДЖЕР"',
+    'ПАО "КОРПОРАЦИЯ "ИРКУТ"',
+    'ЗАО НПЦ ФИРМА "НЕЛК"',
+    'АО МТЗ ТРАНСМАШ',
+    'ООО "ТЭНСНАБ"',
+    'АО "НИИ "Полюс" им.М.Ф.Стельм',
+    'ООО "ОЛЕМАТ"',
+    'АО "ОРКК"-"НИИ КП"',
+    'ФГУП"ВНИИОФИ"',
+    'ООО "ИСТОЧНИК"',
+    'ООО "НИИ Энерготехнологий"',
+    'ООО "Лотес ТМ"',
+    'ООО "ЛазерСервис"',
+    'ПАО АК "Рубин"',
+    'ООО НПО " Горизонт"',
+    'ООО "Сибаналитприбор"',
+    'ЗАО "ЗЭТ"',
+    'ЗАО "БИУС"',
+    'ООО "Электропром"',
+    'АО "Завод Кризо"',
+    'ООО <НПП <ПАРК-ЦЕНТР>',
+    'АО "МОРИНСИС-АГАТ-КИП"',
     'АО АНИТТ "РЕКОРД"',
     'АО АПЗ "РОТОР"',
-    'АО ВП "ЭРА"',
-    'АО Корпорация "ВНИИЭМ"',
-    'АО МТЗ ТРАНСМАШ',
-    'АО МТЗ ТРАНСМАШ ИМ. А.А. ЕГОРЕНКОВА',
-    'АО НИИПП',
-    'АО НИЦ "РЕЗОНАНС"',
-    'АО НПП ЦИФРОВЫЕ РЕШЕНИЯ',
-    'АО"ГЗАС им Попова"',
-    'АО"КЗТМ"',
-    'Беленькая Татьяна Ивановна',
-    'Блохина Ирина Валерьевна',
-    'Валентин Дерябкин',
-    'Валерий Белоусов',
-    'Владимир Бузовский',
-    'ГАЗ-СИСТЕМА-СЕРВИС АО НПФ',
-    'Гетман Максим',
-    'Жиляев Александр Владимирович',
-    'ЗАО "БИУС"',
-    'ЗАО "ЗЭТ"',
-    'ЗАО "КоМЭНС"',
-    'ЗАО "Полимерфильтр"',
-    'ЗАО "ЭРАСИБ"',
-    'ЗАО НПП "Система"',
-    'ЗАО НПЦ ФИРМА "НЕЛК"',
-    'ИКИ РАН',
-    'ИП Артемьев Евгений Александрович',
-    'ИПМТ ДВО РАН',
-    'Калугаприбор',
-    'Ленар Гимадиев',
-    'Максимов Алексей',
-    'МОКБ "Марс"',
-    'НП ЗАО "РЭКО-ВЕК"',
-    'ОАО "Егоршинский радиозавод"',
-    'ОАО "Завод Электросигнал"',
-    'ОАО "Казанский завод "Электроприбор"',
-    'ОАО "НПП КП "Квант"',
-    'ОАО "ПЯТИГОРСКИЙ ЗАВОД "ИМПУЛЬС"',
-    'Ольга',
-    'ООО "Арматех"',
-    'ООО "Беспилотные Системы"',
-    'ООО "БОРЕЙ"',
-    'ООО "Вибратор"',
-    'ООО "ГЕТМОБИТ"',
-    'ООО "ДЖИ-ТЭК"',
-    'ООО "Джусто"',
-    'ООО "ИНДЖЕР"',
-    'ООО "ИНИТЕЛ"',
-    'ООО "ИСТОЧНИК"',
-    'ООО "КИНОТЕАТРАЛЬНЫЕ ТЕХНОЛОГИИ"',
-    'ООО "Компания "Объединенная энергия"',
-    'ООО "ЛазерСервис"',
-    'ООО "ЛОГИС"',
-    'ООО "Логические Системы"',
-    'ООО "Лотес ТМ"',
-    'ООО "МГ-СЕРВИС"',
-    'ООО "Наутилус"',
-    'ООО "Нейрософт"',
-    'ООО "НИИ Энерготехнологий"',
-    'ООО "Николь"',
-    'ООО "НИЦ СЭ И НК"',
-    'ООО "НТП "Энергоконтроль"',
-    'ООО "НЭК"',
-    'ООО "ОПТИМАЛЬНАЯ ФАБРИКА"',
-    'ООО "ПК" АЛЛЕГРИ"',
-    'ООО "ПКФ ПОЛЁТ"',
-    'ООО "ПЛАЗ"',
-    'ООО "Рембаза"',
-    'ООО "РТС-БИТ"',
-    'ООО "РТСОФТ-ВС"',
-    'ООО "Сибаналитприбор"',
-    'ООО "Сигналатомприбор"',
-    'ООО "СМТ ФЛЕКС"',
-    'ООО "СТС"',
-    'ООО "Тир Строй Монтаж"',
-    'ООО "ТПС"',
-    'ООО "ТЭНСНАБ"',
-    'ООО "УРАРТУ"',
-    'ООО "Фабметалл"',
-    'ООО "ФИНКО"',
-    'ООО "Электроконнект"',
     'ООО "Электроконнект" Санкт-Петербург',
-    'ООО "Электропром"',
-    'ООО <НПП <ПАРК-ЦЕНТР>',
-    'ООО «ЛЭМЗ-Т»',
-    'ООО НПО " Горизонт"',
-    'ООО НПП "ЭЛЕКТРОМАШ"',
-    'ООО НППГА"ЛУЧ"',
-    'ООО"КТЦ КЭБ"',
-    'ООО"РАДАРАВИАСЕРВИС"',
-    'ООО«Печатные платы»',
-    'ОП "НИИ АЭМ ТУСУР"',
-    'Павел Титов',
-    'ПАО "НПО "Алмаз"',
-    'ПАО "НПП "Импульс"',
-    'ПАО "РЕАТОН"',
-    'ПАО "Яковлев"',
-    'ПАО АК "Рубин"',
-    'ПАО НПО "Наука"',
-    'ПАО ПЗ "Сигнал"',
-    'ПАО"ГЗАС им Попова"',
-    'ПАО"Саратовский электроприборостроительный з-д им.',
-    'Поляков Олег',
-    'Приходько Сергей Викторович',
-    'РусБитех',
-    'Самарский университет',
-    'Симакина Екатерина Михайловна',
-    'Синвайтес Инжиниринг',
-    'Сколковский институт науки и технологий Сколтех',
-    'Соколов Павел Андреевич',
-    'Стас',
-    'Степанова Марина',
-    'Сумин Евгений',
-    'Сушецкий Велес',
-    'Татьяна',
-    'Тепляков Пётр',
-    'Терёхина Галина Александровна',
-    'Толстова Татьяна',
-    'УФК М.О (ИБП РАН)',
-    'Ф+ тек Берсенева Ксения',
-    'ФГБОУ ВО "ВГУ"',
-    'ФГБУ ФНЦ ВНИИФК',
-    'ФГКУ В/Ч "45187"',
-    'ФГУП "ВНИИФТРИ"',
-    'ФГУП "Крыловский государственный научный центр"',
-    'ФГУП "НАМИ"',
-    'ФГУП"ВНИИА"',
-    'Филиал ИФП СО РАН "КТИПМ"',
-    'Черникова Ольга',
-    'ЧТУП "Печатные платы"',
-    'ЮРГПУ (НПИ)',
-    'ЮФУ, ЮФУ ЮЖНЫЙ ФЕДЕРАЛЬНЫЙ УНИВЕРСИТЕТ, ФГАОУ ВО',
+    'АО "НПФ "Микран"',
+    'АО "ДМЗ" им. Н.П. Федорова',
+    'ООО "Николь"',
+    'ОАО "Казанский завод "Электроприбор"',
+    'ООО "Логические Системы"',
+    'ООО "Вибратор"',
+    'АО " Гирооптика"',
+    'АО "НИИИТ-РК"',
+    'АО " НИИАО"',
+    'АО " Горизонт"',
+    'АО "НИИ Проблем Автоматизации "Северэвмкомплекс"',
+    'АО «РЗП»',
   ];
 
   @override
@@ -509,6 +511,17 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
     _majorDateController.text = _todayFormatted();
     _platyDateController.text = _todayFormatted();
     _initApp();
+    // Автообновление списка треков каждые 3 секунды
+    _tracksWatcherTimer = Timer.periodic(
+      const Duration(seconds: 3),
+      (_) => _loadTracksFromDisk(silent: true),
+    );
+  }
+
+  @override
+  void dispose() {
+    _tracksWatcherTimer?.cancel();
+    super.dispose();
   }
 
   String _todayFormatted() {
@@ -517,30 +530,16 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
   }
 
   Future<void> _initApp() async {
-    final prefs = await SharedPreferences.getInstance();
-    final logsRaw = prefs.getString('major_operation_logs');
-    if (logsRaw != null) {
-      setState(() {
-        _logs = (jsonDecode(logsRaw) as List)
-            .map((e) => MajorLogEntry.fromJson(Map<String, dynamic>.from(e)))
-            .toList();
-      });
-    }
     await _checkSumatraPdf();
     await _loadFirmsFromDisk(isPlaty: false);
     await _loadFirmsFromDisk(isPlaty: true);
+    await _loadTracksFromDisk(silent: true);
   }
 
+  // На Windows работаем прямо из папки, где лежит .exe-файл
   Future<String> _getWorkDirPath() async {
     if (Platform.isWindows) {
-      const customPath = r'C:\PechatnyePlaty';
-      final dir = Directory(customPath);
-      if (!dir.existsSync()) {
-        try {
-          dir.createSync(recursive: true);
-        } catch (_) {}
-      }
-      if (dir.existsSync()) return customPath;
+      return File(Platform.resolvedExecutable).parent.path;
     }
     final docs = await getApplicationDocumentsDirectory();
     return docs.path;
@@ -549,38 +548,49 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
   Future<void> _checkSumatraPdf() async {
     if (!Platform.isWindows) return;
     final workDir = await _getWorkDirPath();
-    final exeDir = File(Platform.resolvedExecutable).parent.path;
-    final found = File('$workDir\\SumatraPDF.exe').existsSync() ||
-        File('$exeDir\\SumatraPDF.exe').existsSync();
+    final found = File('$workDir\\SumatraPDF.exe').existsSync();
     setState(() => _sumatraFound = found);
   }
 
-  Future<void> _addLog(String company, String firm, String details) async {
-    final now = DateTime.now();
-    final timeStr =
-        '${now.day.toString().padLeft(2, '0')}.${now.month.toString().padLeft(2, '0')} '
-        '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+  Future<File> _getTracksFile() async {
+    final dir = await _getWorkDirPath();
+    return File('$dir${Platform.pathSeparator}tracks_today.txt');
+  }
 
-    setState(() {
-      _logs.insert(
-        0,
-        MajorLogEntry(
-          company: company,
-          firm: firm,
-          details: details,
-          time: timeStr,
-        ),
-      );
-      if (_logs.length > 100) {
-        _logs = _logs.sublist(0, 100);
+  Future<void> _loadTracksFromDisk({bool silent = false}) async {
+    try {
+      final file = await _getTracksFile();
+      if (!file.existsSync()) {
+        if (_trackLines.isNotEmpty) {
+          setState(() => _trackLines = []);
+        }
+        return;
       }
-    });
+      final lines = await file.readAsLines(encoding: utf8);
+      final cleaned =
+          lines.map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
+      if (cleaned.length != _trackLines.length ||
+          cleaned.join('\n') != _trackLines.join('\n')) {
+        setState(() => _trackLines = cleaned);
+      }
+      if (!silent) {
+        _showSnackbar('Список треков обновлён (${cleaned.length})');
+      }
+    } catch (_) {}
+  }
 
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      'major_operation_logs',
-      jsonEncode(_logs.map((e) => e.toJson()).toList()),
-    );
+  Future<void> _clearTracksFile() async {
+    final file = await _getTracksFile();
+    if (file.existsSync()) {
+      await file.writeAsString('', encoding: utf8);
+    }
+    setState(() => _trackLines = []);
+    _showSnackbar('Список треков очищен');
+  }
+
+  Future<void> _copyText(String text, String message) async {
+    await Clipboard.setData(ClipboardData(text: text));
+    _showSnackbar(message);
   }
 
   Future<File> _getFirmsFile({required bool isPlaty}) async {
@@ -716,6 +726,7 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
     final pyCode = '''
 # -*- coding: utf-8 -*-
 import os
+import re
 import time
 import subprocess
 from playwright.sync_api import sync_playwright
@@ -730,6 +741,28 @@ PLACES = '${_escapePy(places)}'
 DESCRIPTION = '${_escapePy(desc)}'
 EXTRA_INFO = '${_escapePy(info)}'
 WORK_DIR = r'$workDir'
+
+def save_track_line(track_num):
+    tracks_file = os.path.join(WORK_DIR, 'tracks_today.txt')
+    line = f'{FIRM_NAME} {track_num}'.strip()
+    try:
+        with open(tracks_file, 'a', encoding='utf-8') as f:
+            f.write(line + '\\n')
+        print('Трек сохранён:', line)
+    except Exception as e:
+        print('Ошибка записи трека:', e)
+
+def extract_track(suggested_filename, page_text):
+    m = re.search(r'\\b(\\d{10})\\b', suggested_filename or '')
+    if m:
+        return m.group(1)
+    m2 = re.search(r'\\b(20\\d{8})\\b', page_text or '')
+    if m2:
+        return m2.group(1)
+    m3 = re.search(r'\\b(\\d{10})\\b', page_text or '')
+    if m3:
+        return m3.group(1)
+    return 'БЕЗ_ТРЕКА'
 
 def print_pdf_silent(pdf_path):
     sumatra_local = os.path.join(WORK_DIR, 'SumatraPDF.exe')
@@ -787,10 +820,19 @@ def main():
                     areas.first.fill(EXTRA_INFO)
 
         try:
-            with page.expect_download(timeout=120000) as download_info:
+            with page.expect_download(timeout=180000) as download_info:
                 pass
             download = download_info.value
-            pdf_target = os.path.join(WORK_DIR, f'major_{int(time.time())}.pdf')
+            suggested = download.suggested_filename or ''
+            page_text = ''
+            try:
+                page_text = page.inner_text('body')
+            except Exception:
+                pass
+            track_num = extract_track(suggested, page_text)
+            save_track_line(track_num)
+
+            pdf_target = os.path.join(WORK_DIR, f'major_{track_num}_{int(time.time())}.pdf')
             download.save_as(pdf_target)
             print_pdf_silent(pdf_target)
         except Exception:
@@ -803,20 +845,6 @@ if __name__ == '__main__':
 ''';
 
     await File(scriptPath).writeAsString(pyCode, encoding: utf8);
-
-    setState(() {
-      if (isPlaty) {
-        _lastPlatyAction = 'Оформлено: $firm';
-      } else {
-        _lastMajorAction = 'Оформлено: $firm';
-      }
-    });
-
-    await _addLog(
-      isPlaty ? 'Печатные платы' : 'Электроконнект',
-      firm,
-      'Дата: $date ($time), Вес: $weight кг, Мест: $places',
-    );
 
     if (Platform.isWindows) {
       try {
@@ -841,6 +869,8 @@ if __name__ == '__main__':
   }
 
   Color get _cardBg => widget.isDark ? const Color(0xFF111827) : Colors.white;
+  Color get _sidebarBg =>
+      widget.isDark ? const Color(0xFF0D1320) : const Color(0xFFF8FAFC);
   Color get _borderCol =>
       widget.isDark ? const Color(0xFF1F2937) : const Color(0xFFE2E8F0);
   Color get _subtleText =>
@@ -871,135 +901,266 @@ if __name__ == '__main__':
           borderSide: BorderSide(color: _borderCol),
         ),
         contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final tabs = [
+    return Scaffold(
+      body: Row(
+        children: [
+          _buildSidebar(),
+          Expanded(
+            child: Column(
+              children: [
+                _buildTopBar(),
+                Expanded(
+                  child: _selectedNav == 0
+                      ? _buildMajorCourierWorkspace(isPlaty: false)
+                      : (_selectedNav == 1
+                          ? _buildMajorCourierWorkspace(isPlaty: true)
+                          : _buildTracksTab()),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSidebar() {
+    final navItems = [
       (
+        index: 0,
         title: 'Электроконнект',
-        subtitle: _lastMajorAction,
+        subtitle: 'Major Express',
         icon: Icons.local_shipping_rounded,
         color: const Color(0xFFF59E0B),
       ),
       (
+        index: 1,
         title: 'Печатные платы',
-        subtitle: _lastPlatyAction,
+        subtitle: 'Major Express',
         icon: Icons.developer_board_rounded,
         color: const Color(0xFFA855F7),
       ),
       (
-        title: 'Журнал (${_logs.length})',
-        subtitle: 'История выписок',
-        icon: Icons.history_rounded,
+        index: 2,
+        title: 'Треки (${_trackLines.length})',
+        subtitle: 'Копировать фирмы и треки',
+        icon: Icons.copy_all_rounded,
         color: const Color(0xFF10B981),
       ),
     ];
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Major Express — Выписка накладных'),
-        actions: [
-          if (Platform.isWindows)
+    return Container(
+      width: 240,
+      decoration: BoxDecoration(
+        color: _sidebarBg,
+        border: Border(right: BorderSide(color: _borderCol)),
+      ),
+      child: SafeArea(
+        child: Column(
+          children: [
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
               child: Row(
                 children: [
-                  Icon(
-                    _sumatraFound
-                        ? Icons.print_rounded
-                        : Icons.warning_amber_rounded,
-                    size: 18,
-                    color: _sumatraFound
-                        ? const Color(0xFF10B981)
-                        : const Color(0xFFF59E0B),
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF14B8A6), Color(0xFF0284C7)],
+                      ),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.local_shipping,
+                        color: Colors.white, size: 22),
                   ),
-                  const SizedBox(width: 4),
-                  Text(
-                    _sumatraFound ? 'SumatraPDF OK' : 'Нет SumatraPDF',
-                    style: const TextStyle(fontSize: 12),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Major Express',
+                          style: TextStyle(
+                              fontSize: 15, fontWeight: FontWeight.bold),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          'Выписка накладных',
+                          style: TextStyle(fontSize: 11, color: _subtleText),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               ),
             ),
+            Divider(height: 1, color: _borderCol),
+            Expanded(
+              child: ListView(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                children: navItems.map((item) {
+                  final isSelected = _selectedNav == item.index;
+                  return InkWell(
+                    borderRadius: BorderRadius.circular(10),
+                    onTap: () => setState(() => _selectedNav = item.index),
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 11),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? item.color.withOpacity(0.16)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: isSelected
+                              ? item.color.withOpacity(0.5)
+                              : Colors.transparent,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(item.icon,
+                              color: isSelected ? item.color : _subtleText,
+                              size: 20),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  item.title,
+                                  style: TextStyle(
+                                    fontSize: 13.5,
+                                    fontWeight: isSelected
+                                        ? FontWeight.w700
+                                        : FontWeight.w500,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                Text(
+                                  item.subtitle,
+                                  style: TextStyle(
+                                      fontSize: 11, color: _subtleText),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+            if (Platform.isWindows)
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                  decoration: BoxDecoration(
+                    color: (_sumatraFound
+                            ? const Color(0xFF10B981)
+                            : const Color(0xFFF59E0B))
+                        .withOpacity(0.14),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: (_sumatraFound
+                              ? const Color(0xFF10B981)
+                              : const Color(0xFFF59E0B))
+                          .withOpacity(0.45),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        _sumatraFound
+                            ? Icons.print_rounded
+                            : Icons.warning_amber_rounded,
+                        size: 16,
+                        color: _sumatraFound
+                            ? const Color(0xFF10B981)
+                            : const Color(0xFFF59E0B),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _sumatraFound
+                              ? 'Автопечать SumatraPDF готова'
+                              : 'Нет SumatraPDF.exe',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            color: _sumatraFound
+                                ? const Color(0xFF10B981)
+                                : const Color(0xFFF59E0B),
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTopBar() {
+    const titles = [
+      'Электроконнект — Major Express',
+      'Печатные платы — Major Express',
+      'Выписанные накладные (Фирма + Трек)',
+    ];
+    return Container(
+      height: 58,
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      decoration: BoxDecoration(
+        color: _cardBg,
+        border: Border(bottom: BorderSide(color: _borderCol)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  titles[_selectedNav],
+                  style: const TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                const Text(
+                  '● ONLINE • Windows',
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF10B981),
+                      fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
+          ),
           IconButton(
             icon: Icon(
               widget.isDark
                   ? Icons.light_mode_outlined
                   : Icons.dark_mode_outlined,
+              size: 20,
             ),
             onPressed: widget.onToggleTheme,
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-            child: Row(
-              children: List.generate(tabs.length, (idx) {
-                final t = tabs[idx];
-                final active = _selectedTab == idx;
-                return Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(12),
-                      onTap: () => setState(() => _selectedTab = idx),
-                      child: Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: active ? t.color.withOpacity(0.16) : _cardBg,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: active ? t.color : _borderCol,
-                          ),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(t.icon, color: t.color, size: 20),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    t.title,
-                                    style: const TextStyle(
-                                      fontSize: 13.5,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  Text(
-                                    t.subtitle,
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: _subtleText,
-                                    ),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              }),
-            ),
-          ),
-          Expanded(
-            child: _selectedTab == 0
-                ? _buildMajorCourierWorkspace(isPlaty: false)
-                : (_selectedTab == 1
-                    ? _buildMajorCourierWorkspace(isPlaty: true)
-                    : _buildLogsTab()),
           ),
         ],
       ),
@@ -1029,15 +1190,16 @@ if __name__ == '__main__':
             .toList();
 
     return Padding(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(20),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Левая часть — форма заказа
           Expanded(
             flex: 6,
             child: SingleChildScrollView(
               child: Container(
-                padding: const EdgeInsets.all(20),
+                padding: const EdgeInsets.all(22),
                 decoration: BoxDecoration(
                   color: _cardBg,
                   borderRadius: BorderRadius.circular(16),
@@ -1046,29 +1208,70 @@ if __name__ == '__main__':
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      isPlaty
-                          ? 'ООО «Печатные платы» — Major Express'
-                          : 'ООО «ЭЛЕКТРОконнект» — Major Express',
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: accent.withOpacity(0.16),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(
+                            isPlaty
+                                ? Icons.developer_board_rounded
+                                : Icons.local_shipping_rounded,
+                            color: accent,
+                            size: 24,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                isPlaty
+                                    ? 'ООО «Печатные платы» — Major Express'
+                                    : 'ООО «ЭЛЕКТРОконнект» — Major Express',
+                                style: const TextStyle(
+                                  fontSize: 17.5,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              Text(
+                                isPlaty
+                                    ? 'Отправитель: ООО «Печатные платы» • Логин: Palat • Автопечать А4'
+                                    : 'Отправитель: ООО «ЭЛЕКТРОконнект» Москва • Логин: Electroconnect • Автопечать А4',
+                                style: TextStyle(
+                                    fontSize: 11.5, color: _subtleText),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 18),
                     Row(
                       children: [
                         Expanded(
                           child: _styledInputField(
                             controller: firmCtrl,
-                            label: 'Фирма-получатель',
+                            label: 'Фирма-получатель (выбери справа или впиши)',
                             icon: Icons.business_rounded,
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        ElevatedButton.icon(
-                          icon: const Icon(Icons.add, size: 18),
-                          label: const Text('В базу'),
+                        const SizedBox(width: 10),
+                        OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFF10B981),
+                            side: const BorderSide(color: Color(0xFF10B981)),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 15),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10)),
+                          ),
+                          icon: const Icon(Icons.library_add_outlined, size: 18),
+                          label: const Text('+ В базу'),
                           onPressed: () => _addFirmToDictionary(
                             isPlaty: isPlaty,
                             rawName: firmCtrl.text,
@@ -1076,7 +1279,7 @@ if __name__ == '__main__':
                         ),
                       ],
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 14),
                     Row(
                       children: [
                         Expanded(
@@ -1090,13 +1293,35 @@ if __name__ == '__main__':
                         Expanded(
                           child: _styledInputField(
                             controller: timeCtrl,
-                            label: 'Интервал времени',
+                            label: 'Интервал времени забора',
                             icon: Icons.access_time_rounded,
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        OutlinedButton(
+                          onPressed: () =>
+                              setState(() => dateCtrl.text = _todayFormatted()),
+                          child: const Text('Сегодня'),
+                        ),
+                        OutlinedButton(
+                          onPressed: () =>
+                              setState(() => timeCtrl.text = '10:00-14:00'),
+                          child: const Text('10:00-14:00'),
+                        ),
+                        OutlinedButton(
+                          onPressed: () =>
+                              setState(() => timeCtrl.text = '14:00-18:00'),
+                          child: const Text('14:00-18:00'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
                     Row(
                       children: [
                         Expanded(
@@ -1110,7 +1335,7 @@ if __name__ == '__main__':
                         Expanded(
                           child: _styledInputField(
                             controller: placesCtrl,
-                            label: 'Мест',
+                            label: 'Кол-во мест',
                             icon: Icons.inventory_2_outlined,
                           ),
                         ),
@@ -1119,31 +1344,34 @@ if __name__ == '__main__':
                           flex: 2,
                           child: _styledInputField(
                             controller: descCtrl,
-                            label: 'Описание',
+                            label: 'Описание вложения',
                             icon: Icons.description_outlined,
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 14),
                     _styledInputField(
                       controller: infoCtrl,
-                      label: 'Примечание для курьера',
+                      label: 'Информация для забора груза (примечание)',
                       icon: Icons.info_outline_rounded,
                     ),
-                    const SizedBox(height: 18),
+                    const SizedBox(height: 20),
                     SizedBox(
                       width: double.infinity,
                       child: ElevatedButton.icon(
                         style: ElevatedButton.styleFrom(
                           backgroundColor: accent,
                           foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 15),
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12)),
                         ),
                         icon: const Icon(Icons.rocket_launch_rounded),
                         label: const Text(
                           'ОФОРМИТЬ И РАСПЕЧАТАТЬ НАКЛАДНУЮ',
-                          style: TextStyle(fontWeight: FontWeight.bold),
+                          style: TextStyle(
+                              fontWeight: FontWeight.bold, fontSize: 14),
                         ),
                         onPressed: isPlaty
                             ? _generatePlatyMajorExpressScript
@@ -1155,7 +1383,8 @@ if __name__ == '__main__':
               ),
             ),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 18),
+          // Правая часть — Справочник получателей с поиском
           Expanded(
             flex: 4,
             child: Container(
@@ -1169,41 +1398,69 @@ if __name__ == '__main__':
                 children: [
                   Row(
                     children: [
+                      Icon(Icons.contact_page_rounded, color: accent, size: 20),
+                      const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Справочник (${fullList.length})',
+                          'Справочник получателей (${fullList.length})',
                           style: const TextStyle(
                             fontSize: 15,
                             fontWeight: FontWeight.bold,
                           ),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                       IconButton(
-                        icon: const Icon(Icons.edit_note_rounded),
-                        tooltip: 'Открыть в Блокноте',
+                        icon: const Icon(Icons.edit_note_rounded, size: 20),
+                        tooltip: 'Открыть файл базы в Блокноте',
                         onPressed: () =>
                             _openFirmsTxtInNotepad(isPlaty: isPlaty),
                       ),
                       IconButton(
-                        icon: const Icon(Icons.refresh_rounded),
+                        icon: const Icon(Icons.refresh_rounded, size: 20),
                         tooltip: 'Обновить из файла',
                         onPressed: () =>
                             _loadFirmsFromDisk(isPlaty: isPlaty),
                       ),
                     ],
                   ),
+                  const SizedBox(height: 10),
                   TextField(
                     controller: searchCtrl,
                     onChanged: (val) => setState(() => isPlaty
                         ? _platyFirmFilter = val.trim()
                         : _majorFirmFilter = val.trim()),
-                    decoration: const InputDecoration(
-                      hintText: 'Поиск фирмы...',
-                      prefixIcon: Icon(Icons.search),
+                    decoration: InputDecoration(
+                      hintText: 'Поиск компании (введи часть названия)...',
+                      hintStyle: TextStyle(fontSize: 13, color: _subtleText),
+                      prefixIcon: const Icon(Icons.search, size: 19),
+                      suffixIcon: filter.isNotEmpty
+                          ? IconButton(
+                              icon: const Icon(Icons.clear, size: 16),
+                              onPressed: () {
+                                searchCtrl.clear();
+                                setState(() => isPlaty
+                                    ? _platyFirmFilter = ''
+                                    : _majorFirmFilter = '');
+                              },
+                            )
+                          : null,
+                      filled: true,
+                      fillColor: widget.isDark
+                          ? const Color(0xFF182235)
+                          : const Color(0xFFF8FAFC),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide(color: _borderCol),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide(color: _borderCol),
+                      ),
                       isDense: true,
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 10),
                   Expanded(
                     child: ListView.builder(
                       itemCount: filtered.length,
@@ -1211,10 +1468,16 @@ if __name__ == '__main__':
                         final name = filtered[idx];
                         return ListTile(
                           dense: true,
-                          title: Text(name, style: const TextStyle(fontSize: 13)),
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 0),
+                          leading: Icon(Icons.apartment_rounded,
+                              size: 16, color: accent),
+                          title: Text(name,
+                              style: const TextStyle(fontSize: 13)),
                           onTap: () => setState(() => firmCtrl.text = name),
                           trailing: IconButton(
-                            icon: const Icon(Icons.close, size: 14),
+                            icon: Icon(Icons.close,
+                                size: 14, color: _subtleText),
                             onPressed: () => _removeFirmFromDictionary(
                               isPlaty: isPlaty,
                               firmName: name,
@@ -1233,64 +1496,86 @@ if __name__ == '__main__':
     );
   }
 
-  Widget _buildLogsTab() {
+  Widget _buildTracksTab() {
     return Padding(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(20),
       child: Container(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
           color: _cardBg,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(color: _borderCol),
         ),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                const Text(
-                  'Журнал выписок Major Express',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                const Icon(Icons.receipt_long_rounded,
+                    color: Color(0xFF10B981), size: 22),
+                const SizedBox(width: 10),
+                Text(
+                  'Выписанные накладные (${_trackLines.length})',
+                  style: const TextStyle(
+                      fontSize: 17, fontWeight: FontWeight.bold),
                 ),
                 const Spacer(),
-                TextButton(
-                  onPressed: () async {
-                    setState(() => _logs.clear());
-                    final prefs = await SharedPreferences.getInstance();
-                    await prefs.remove('major_operation_logs');
-                  },
-                  child: const Text(
-                    'Очистить',
-                    style: TextStyle(color: Colors.redAccent),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF10B981),
+                    foregroundColor: Colors.white,
                   ),
+                  icon: const Icon(Icons.copy_all_rounded, size: 18),
+                  label: const Text('КОПИРОВАТЬ ВСЁ'),
+                  onPressed: _trackLines.isEmpty
+                      ? null
+                      : () => _copyText(
+                            _trackLines.join('\n'),
+                            'Скопированы все ${_trackLines.length} строк!',
+                          ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: const Icon(Icons.refresh_rounded),
+                  tooltip: 'Обновить из tracks_today.txt',
+                  onPressed: () => _loadTracksFromDisk(silent: false),
+                ),
+                TextButton(
+                  onPressed: _trackLines.isEmpty ? null : _clearTracksFile,
+                  child: const Text('Очистить',
+                      style: TextStyle(color: Colors.redAccent)),
                 ),
               ],
             ),
-            const Divider(),
+            const Divider(height: 24),
             Expanded(
-              child: _logs.isEmpty
+              child: _trackLines.isEmpty
                   ? Center(
                       child: Text(
-                        'Выписок пока не было',
-                        style: TextStyle(color: _subtleText),
+                        'После выписки накладных здесь автоматически появятся строки вида:\nООО "Галс плюс" 2071839662',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: _subtleText, fontSize: 14),
                       ),
                     )
                   : ListView.separated(
-                      itemCount: _logs.length,
+                      itemCount: _trackLines.length,
                       separatorBuilder: (_, __) =>
                           Divider(height: 1, color: _borderCol),
                       itemBuilder: (context, idx) {
-                        final item = _logs[idx];
+                        final line = _trackLines[idx];
                         return ListTile(
-                          title: Text(
-                            '[${item.company}] ${item.firm} (${item.time})',
+                          title: SelectableText(
+                            line,
                             style: const TextStyle(
-                              fontSize: 13.5,
-                              fontWeight: FontWeight.bold,
+                              fontSize: 15.5,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
-                          subtitle: Text(
-                            item.details,
-                            style: const TextStyle(fontSize: 12),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.copy_rounded, size: 18),
+                            tooltip: 'Копировать строку',
+                            onPressed: () =>
+                                _copyText(line, 'Скопировано: $line'),
                           ),
                         );
                       },
