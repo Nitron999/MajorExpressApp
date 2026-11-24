@@ -826,7 +826,7 @@ if __name__ == '__main__':
         _showSnackbar('Скрипт сохранён: $scriptPath (ошибка python: $e)');
       }
     } else {
-      await Share.shareXFiles([XFile(path: scriptPath)], text: 'Скрипт Major Express');
+      await Share.shareXFiles([XFile(scriptPath)], text: 'Скрипт Major Express');
     }
   }
 
