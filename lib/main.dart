@@ -90,6 +90,12 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
   bool _sumatraFound = false;
   Timer? _tracksWatcherTimer;
 
+  // Зашитые учётки Major Express
+  static const String _electroLogin = 'Electroconnect';
+  static const String _electroPass = 'Y2501212e4e5d62';
+  static const String _platyLogin = 'Palat';
+  static const String _platyPass = 'Z250121e9a7a762';
+
   // Электроконнект
   final TextEditingController _majorFirmController = TextEditingController();
   final TextEditingController _majorDateController = TextEditingController();
@@ -675,8 +681,8 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
     }
     await _runMajorAutomation(
       isPlaty: false,
-      login: 'Electroconnect',
-      pass: 'Y2501212e4e5d62',
+      login: _electroLogin,
+      pass: _electroPass,
       firm: firm,
       date: _majorDateController.text.trim(),
       time: _majorTimeController.text.trim(),
@@ -695,8 +701,8 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
     }
     await _runMajorAutomation(
       isPlaty: true,
-      login: 'Palat',
-      pass: 'Z250121e9a7a762',
+      login: _platyLogin,
+      pass: _platyPass,
       firm: firm,
       date: _platyDateController.text.trim(),
       time: _platyTimeController.text.trim(),
@@ -1240,8 +1246,8 @@ if __name__ == '__main__':
                               ),
                               Text(
                                 isPlaty
-                                    ? 'Отправитель: ООО «Печатные платы» • Логин: Palat • Автопечать А4'
-                                    : 'Отправитель: ООО «ЭЛЕКТРОконнект» Москва • Логин: Electroconnect • Автопечать А4',
+                                    ? 'Отправитель: ООО «Печатные платы» • Логин: $_platyLogin • Автопечать А4'
+                                    : 'Отправитель: ООО «ЭЛЕКТРОконнект» Москва • Логин: $_electroLogin • Автопечать А4',
                                 style: TextStyle(
                                     fontSize: 11.5, color: _subtleText),
                               ),
