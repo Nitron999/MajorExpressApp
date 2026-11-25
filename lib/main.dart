@@ -1511,9 +1511,11 @@ import re
 import json
 import time
 import datetime
+import tempfile
 import subprocess
 from playwright.sync_api import sync_playwright
 
+IS_PLATY = ${isPlaty ? 'True' : 'False'}
 LOGIN = '${_escapePy(login)}'
 PASSWORD = '${_escapePy(pass)}'
 COMPANY_LABEL = '${_escapePy(companyLabel)}'
@@ -1567,17 +1569,16 @@ def save_track_and_history(track_num):
     except Exception as e:
         print('Ошибка записи истории:', e)
 
-def extract_track(suggested_filename, page_text):
-    m = re.search(r'\\b(\\d{10})\\b', suggested_filename or '')
+def extract_track(text_source):
+    if not text_source:
+        return ''
+    m = re.search(r'\\b(20\\d{8})\\b', text_source)
     if m:
         return m.group(1)
-    m2 = re.search(r'\\b(20\\d{8})\\b', page_text or '')
+    m2 = re.search(r'\\b(\\d{10})\\b', text_source)
     if m2:
         return m2.group(1)
-    m3 = re.search(r'\\b(\\d{10})\\b', page_text or '')
-    if m3:
-        return m3.group(1)
-    return 'БЕЗ_ТРЕКА'
+    return ''
 
 def print_pdf_silent(pdf_path):
     sumatra_local = os.path.join(WORK_DIR, 'SumatraPDF.exe')
@@ -1585,119 +1586,209 @@ def print_pdf_silent(pdf_path):
     try:
         subprocess.run([sumatra_exe, '-print-to-default', '-silent', pdf_path], check=True)
         print('PDF отправлен на печать:', pdf_path)
+        return True
     except Exception as e:
         print('Ошибка печати SumatraPDF:', e)
+        return False
 
 def main():
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
-        context = browser.new_context(accept_downloads=True)
-        page = context.new_page()
-        page.goto('https://lk.major-express.ru/login.aspx?ReturnUrl=%2f', timeout=60000)
-        page.wait_for_load_state('domcontentloaded')
-        page.wait_for_timeout(800)
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=False,
+                slow_mo=100,
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-infobars',
+                    '--no-sandbox'
+                ]
+            )
+            context = browser.new_context(
+                accept_downloads=True,
+                viewport={'width': 1280, 'height': 800},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            )
+            context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            page = context.new_page()
 
-        # Надёжный ввод логина и пароля
-        visible_inputs = page.locator('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):visible')
-        if visible_inputs.count() >= 2:
-            login_box = visible_inputs.nth(0)
-            pass_box = visible_inputs.nth(1)
-            login_box.click()
-            login_box.fill(LOGIN)
-            pass_box.click()
-            page.wait_for_timeout(200)
-            page.keyboard.type(PASSWORD)
-        else:
-            page.locator('input[type="text"]').first.click()
-            page.locator('input[type="text"]').first.fill(LOGIN)
-            page.keyboard.press('Tab')
-            page.wait_for_timeout(200)
-            page.keyboard.type(PASSWORD)
+            print('1. Открываю страницу входа Major Express (lke.major-express.ru)...')
+            page.goto('https://lke.major-express.ru/login.aspx', timeout=60000)
+            page.wait_for_load_state('domcontentloaded')
 
-        page.wait_for_timeout(300)
+            # Ввод логина
+            login_input = page.locator("input[name='TextBox1']")
+            login_input.click()
+            login_input.fill(LOGIN)
 
-        # Надёжное нажатие видимой кнопки "Войти" + страховка через Enter
-        clicked = False
-        for sel in [
-            'input[type="submit"]:visible',
-            'input[type="button"][value*="Войти"]:visible',
-            'button:has-text("Войти"):visible',
-            'a:has-text("Войти"):visible',
-            'text="Войти"',
-        ]:
-            loc = page.locator(sel)
-            if loc.count() > 0:
-                try:
-                    loc.first.click(timeout=5000)
-                    clicked = True
-                    break
-                except Exception:
-                    pass
-
-        if not clicked:
-            page.keyboard.press('Enter')
-        else:
+            # Ввод пароля
+            pass_input = page.locator("input[name='TextBox2']")
+            pass_input.click()
+            pass_input.fill(PASSWORD)
             page.wait_for_timeout(500)
-            if 'login.aspx' in page.url.lower():
-                page.keyboard.press('Enter')
 
-        page.wait_for_load_state('networkidle')
-        page.wait_for_timeout(1200)
-
-        page.goto('https://lk.major-express.ru/Templates.aspx', timeout=60000)
-        page.wait_for_timeout(1500)
-
-        search_inputs = page.locator('input[type="text"]')
-        if search_inputs.count() > 0:
-            search_inputs.first.fill(FIRM_NAME)
-            page.keyboard.press('Enter')
-            page.wait_for_timeout(1500)
-
-        create_btn = page.locator('a:has-text("Создать"), button:has-text("Создать")').first
-        if create_btn.count() > 0:
-            create_btn.click()
-            page.wait_for_load_state('networkidle')
-            page.wait_for_timeout(1200)
-
-            inputs = page.locator('input[type="text"]')
-            for idx in range(inputs.count()):
-                el = inputs.nth(idx)
-                name_attr = (el.get_attribute('name') or '').lower()
-                id_attr = (el.get_attribute('id') or '').lower()
-                if 'weight' in name_attr or 'weight' in id_attr or 'вес' in name_attr:
-                    el.fill(WEIGHT)
-                elif 'place' in name_attr or 'place' in id_attr or 'мест' in name_attr:
-                    el.fill(PLACES)
-                elif 'desc' in name_attr or 'cargo' in id_attr:
-                    el.fill(DESCRIPTION)
-                elif 'date' in name_attr or 'date' in id_attr:
-                    el.fill(PICKUP_DATE)
-
-            if EXTRA_INFO:
-                areas = page.locator('textarea')
-                if areas.count() > 0:
-                    areas.first.fill(EXTRA_INFO)
-
-        try:
-            with page.expect_download(timeout=180000) as download_info:
-                pass
-            download = download_info.value
-            suggested = download.suggested_filename or ''
-            page_text = ''
+            print('-> Нажимаю Вход...')
+            pass_input.press('Enter')
             try:
-                page_text = page.inner_text('body')
+                page.locator("#Button1, input[name='Button1'], input[value='Вход']").first.click(timeout=3000)
             except Exception:
                 pass
-            track_num = extract_track(suggested, page_text)
-            save_track_and_history(track_num)
 
-            pdf_target = os.path.join(WORK_DIR, f'major_{track_num}_{int(time.time())}.pdf')
-            download.save_as(pdf_target)
-            print_pdf_silent(pdf_target)
-        except Exception:
-            pass
+            print('>>> Если появилась капча — реши её в браузере и нажми Вход!')
+            page.wait_for_selector("a:has-text('ЗАКАЗЫ')", timeout=180000)
+            print('-> Вход выполнен. Перехожу к созданию заказа...')
 
-        page.wait_for_timeout(15000)
+            page.get_by_role('link', name='ЗАКАЗЫ').click()
+            page.get_by_role('button', name='Вызвать курьера').click()
+            page.wait_for_load_state('networkidle')
+
+            print('2. Заполняю данные...')
+
+            # 1. ОТПРАВИТЕЛЬ (для Электроконнекта всегда строго Москва)
+            if not IS_PLATY:
+                print('-> Фиксирую отправителя: ООО «ЭЛЕКТРОконнект» Москва...')
+                shipper_inp = page.locator('#ctl00_MainPlaceHolder_o_cs_ddlListShippers_I')
+                shipper_inp.click()
+                shipper_inp.press('ControlOrMeta+A')
+                shipper_inp.press('Backspace')
+                shipper_inp.fill('ООО «ЭЛЕКТРОконнект» Москва')
+                page.wait_for_timeout(1500)
+                page.keyboard.press('ArrowDown')
+                page.keyboard.press('Enter')
+                page.wait_for_timeout(1000)
+
+            # 2. ПОЛУЧАТЕЛЬ
+            print(f'-> Вбиваю получателя: {FIRM_NAME}...')
+            consignee_inp = page.locator('#ctl00_MainPlaceHolder_o_cc_ddlConsignee_I')
+            consignee_inp.click()
+            consignee_inp.press('ControlOrMeta+A')
+            consignee_inp.press('Backspace')
+            consignee_inp.fill(FIRM_NAME)
+            page.wait_for_timeout(1500)
+            page.keyboard.press('ArrowDown')
+            page.keyboard.press('Enter')
+            page.wait_for_timeout(1000)
+
+            # 3. Дата забора
+            date_str = PICKUP_DATE if PICKUP_DATE else datetime.date.today().strftime('%d.%m.%Y')
+            date_inp = page.locator('#ctl00_MainPlaceHolder_o_deDateZabor_I')
+            date_inp.click()
+            date_inp.press('ControlOrMeta+A')
+            date_inp.press('Backspace')
+            date_inp.fill(date_str)
+            page.keyboard.press('Enter')
+            page.wait_for_timeout(500)
+
+            # 4. Время забора (берём начальный час, например "14" из "14:00-18:00")
+            m_hour = re.search(r'(\\d{2})', PICKUP_TIME or '14')
+            time_prefix = m_hour.group(1) if m_hour else '14'
+            print(f'-> Устанавливаю интервал ({PICKUP_TIME}, фильтр {time_prefix})...')
+            time_inp = page.locator('#ctl00_MainPlaceHolder_o_ddlZakazTimeNum_I')
+            time_inp.click()
+            time_inp.press('ControlOrMeta+A')
+            time_inp.press('Backspace')
+            time_inp.fill(time_prefix)
+            page.wait_for_timeout(1500)
+            try:
+                page.locator("[id*='ctl00_MainPlaceHolder_o_ddlZakazTimeNum_DDD'] td").filter(has_text=time_prefix).first.click(timeout=3000)
+            except Exception:
+                page.keyboard.press('ArrowDown')
+                page.keyboard.press('Enter')
+            page.wait_for_timeout(500)
+
+            # 5. Параметры груза
+            page.locator('#ctl00_MainPlaceHolder_o_tbWeight_I').fill(WEIGHT or '1')
+            page.locator('#ctl00_MainPlaceHolder_o_tbPlaceCount_I').fill(PLACES or '1')
+
+            desc_inp = page.locator('#ctl00_MainPlaceHolder_o_ddlDescription_I')
+            desc_inp.click()
+            desc_inp.press('ControlOrMeta+A')
+            desc_inp.press('Backspace')
+            desc_inp.fill(DESCRIPTION or 'платы')
+            page.keyboard.press('Enter')
+
+            if EXTRA_INFO:
+                rem_inp = page.locator('#ctl00_MainPlaceHolder_o_tbRem')
+                rem_inp.fill(EXTRA_INFO)
+
+            print('-> Все поля заполнены. Создаю заказ...')
+            page.wait_for_timeout(1000)
+
+            # 6. Создание заказа
+            page.once('dialog', lambda dialog: dialog.accept())
+            page.get_by_role('button', name='Создать заказ').click()
+
+            try:
+                page.get_by_role('button', name='OK').click(timeout=6000)
+            except Exception:
+                pass
+
+            print('-> Перехожу к созданию накладной...')
+            page.locator('span').filter(has_text='Создать накладную').click()
+            page.wait_for_load_state('networkidle')
+
+            page.get_by_role('button', name='Сохранить накладную').click()
+            page.wait_for_load_state('networkidle')
+
+            print('-> Жду подготовку PDF на сервере...')
+            page.wait_for_timeout(3000)
+
+            # Пытаемся вытащить трек со страницы накладной
+            track_num = ''
+            try:
+                body_text = page.inner_text('body')
+                track_num = extract_track(body_text)
+            except Exception:
+                pass
+
+            print('-> Нажимаю Печать и перехватываю PDF...')
+            printed = False
+            pdf_temp_path = os.path.join(tempfile.gettempdir(), f'major_{track_num or "doc"}_{int(time.time())}.pdf')
+
+            # Пробуем поймать прямое скачивание PDF или новую вкладку с PDF
+            try:
+                with page.expect_download(timeout=10000) as download_info:
+                    page.get_by_role('button', name='Печать', exact=True).click()
+                download = download_info.value
+                if not track_num:
+                    track_num = extract_track(download.suggested_filename or '')
+                download.save_as(pdf_temp_path)
+                printed = print_pdf_silent(pdf_temp_path)
+            except Exception:
+                # Если не скачалось напрямую — проверяем, открылась ли вкладка с PDF
+                page.wait_for_timeout(2000)
+                for p_tab in context.pages:
+                    if p_tab != page:
+                        try:
+                            p_tab.wait_for_load_state('load', timeout=10000)
+                        except Exception:
+                            pass
+                        tab_url = p_tab.url
+                        if not track_num:
+                            track_num = extract_track(tab_url)
+                        try:
+                            resp = context.request.get(tab_url)
+                            if resp.ok and resp.body()[:4] == b'%PDF':
+                                with open(pdf_temp_path, 'wb') as f_pdf:
+                                    f_pdf.write(resp.body())
+                                printed = print_pdf_silent(pdf_temp_path)
+                                break
+                        except Exception:
+                            pass
+
+            save_track_and_history(track_num or 'БЕЗ_ТРЕКА')
+
+            if printed:
+                print('ГОТОВО! Трек записан, накладная отправлена на печать через SumatraPDF.')
+                page.wait_for_timeout(4000)
+                browser.close()
+            else:
+                print('Трек записан. Если печать не ушла сама — распечатай из открытого окна браузера.')
+                page.wait_for_timeout(30000)
+                browser.close()
+
+    except Exception as e:
+        print(f'[ОШИБКА]: {e}')
+        time.sleep(10)
 
 if __name__ == '__main__':
     main()
