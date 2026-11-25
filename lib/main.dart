@@ -1754,44 +1754,74 @@ def main():
             except Exception:
                 pass
 
-            print('-> Нажимаю Печать и перехватываю PDF...')
-            printed = False
+            print('-> Включаю перехват PDF-потока и нажимаю Печать...')
+            pdf_captured = []
+
+            def intercept_pdf(route):
+                try:
+                    resp = route.fetch()
+                    ct = (resp.headers.get('content-type') or '').lower()
+                    body = resp.body()
+                    if body and (body[:4] == b'%PDF' or 'application/pdf' in ct):
+                        cd = resp.headers.get('content-disposition') or ''
+                        pdf_captured.append((body, route.request.url, cd))
+                    route.fulfill(response=resp)
+                except Exception:
+                    try:
+                        route.continue_()
+                    except Exception:
+                        pass
+
+            context.route('**/*', intercept_pdf)
+
             pdf_temp_path = os.path.join(tempfile.gettempdir(), f'major_{track_num or "doc"}_{int(time.time())}.pdf')
+            printed = False
 
             try:
-                with page.expect_download(timeout=10000) as download_info:
-                    page.get_by_role('button', name='Печать', exact=True).click()
-                download = download_info.value
-                if not track_num:
-                    track_num = extract_track(download.suggested_filename or '')
-                download.save_as(pdf_temp_path)
-                printed = print_pdf_silent(pdf_temp_path)
+                page.get_by_role('button', name='Печать', exact=True).click()
             except Exception:
-                page.wait_for_timeout(2000)
+                pass
+
+            # Ждём до 15 секунд, пока сервер отдаст %PDF
+            for _ in range(30):
+                if pdf_captured:
+                    break
+                page.wait_for_timeout(500)
+
+            try:
+                context.unroute('**/*', intercept_pdf)
+            except Exception:
+                pass
+
+            if pdf_captured:
+                pdf_bytes, pdf_url, pdf_cd = pdf_captured[0]
+                if not track_num:
+                    track_num = extract_track(pdf_cd) or extract_track(pdf_url)
+                with open(pdf_temp_path, 'wb') as f_pdf:
+                    f_pdf.write(pdf_bytes)
+                printed = print_pdf_silent(pdf_temp_path)
+            else:
+                # Резервный способ: проверяем все открытые вкладки (включая текущую)
+                page.wait_for_timeout(1500)
                 for p_tab in context.pages:
-                    if p_tab != page:
-                        try:
-                            p_tab.wait_for_load_state('load', timeout=10000)
-                        except Exception:
-                            pass
-                        tab_url = p_tab.url
-                        if not track_num:
-                            track_num = extract_track(tab_url)
-                        try:
-                            resp = context.request.get(tab_url)
-                            if resp.ok and resp.body()[:4] == b'%PDF':
-                                with open(pdf_temp_path, 'wb') as f_pdf:
-                                    f_pdf.write(resp.body())
-                                printed = print_pdf_silent(pdf_temp_path)
-                                break
-                        except Exception:
-                            pass
+                    tab_url = p_tab.url
+                    if not track_num:
+                        track_num = extract_track(tab_url)
+                    try:
+                        resp = context.request.get(tab_url)
+                        if resp.ok and resp.body()[:4] == b'%PDF':
+                            with open(pdf_temp_path, 'wb') as f_pdf:
+                                f_pdf.write(resp.body())
+                            printed = print_pdf_silent(pdf_temp_path)
+                            break
+                    except Exception:
+                        pass
 
             save_track_and_history(track_num or 'БЕЗ_ТРЕКА')
 
             if printed:
                 print('ГОТОВО! Трек записан, накладная отправлена на печать через SumatraPDF.')
-                page.wait_for_timeout(4000)
+                page.wait_for_timeout(3000)
                 browser.close()
             else:
                 print('Трек записан. Если печать не ушла сама — распечатай из открытого окна браузера.')
