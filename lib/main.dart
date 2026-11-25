@@ -70,6 +70,49 @@ class _MajorExpressAppState extends State<MajorExpressApp> {
   }
 }
 
+class MajorHistoryEntry {
+  final String date;
+  final String weekday;
+  final String time;
+  final String company;
+  final String firm;
+  final String track;
+  final String weight;
+  final String places;
+  final String desc;
+  final String pickupDate;
+  final String pickupTime;
+
+  MajorHistoryEntry({
+    required this.date,
+    required this.weekday,
+    required this.time,
+    required this.company,
+    required this.firm,
+    required this.track,
+    required this.weight,
+    required this.places,
+    required this.desc,
+    required this.pickupDate,
+    required this.pickupTime,
+  });
+
+  factory MajorHistoryEntry.fromJson(Map<String, dynamic> json) =>
+      MajorHistoryEntry(
+        date: json['date']?.toString() ?? '',
+        weekday: json['weekday']?.toString() ?? '',
+        time: json['time']?.toString() ?? '',
+        company: json['company']?.toString() ?? '',
+        firm: json['firm']?.toString() ?? '',
+        track: json['track']?.toString() ?? '',
+        weight: json['weight']?.toString() ?? '',
+        places: json['places']?.toString() ?? '',
+        desc: json['desc']?.toString() ?? '',
+        pickupDate: json['pickup_date']?.toString() ?? '',
+        pickupTime: json['pickup_time']?.toString() ?? '',
+      );
+}
+
 class MajorWorkspaceScreen extends StatefulWidget {
   final bool isDark;
   final VoidCallback onToggleTheme;
@@ -85,10 +128,10 @@ class MajorWorkspaceScreen extends StatefulWidget {
 }
 
 class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
-  // 0 = Электроконнект, 1 = Печатные платы, 2 = Треки и копирование
+  // 0 = Электроконнект, 1 = Печатные платы, 2 = Треки, 3 = История
   int _selectedNav = 0;
   bool _sumatraFound = false;
-  Timer? _tracksWatcherTimer;
+  Timer? _watcherTimer;
 
   // Зашитые учётки Major Express
   static const String _electroLogin = 'Electroconnect';
@@ -134,6 +177,12 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
 
   // Список выписанных треков (формат: "Фирма Трек")
   List<String> _trackLines = [];
+
+  // Подробная история выписок
+  List<MajorHistoryEntry> _historyEntries = [];
+  final TextEditingController _historySearchController =
+      TextEditingController();
+  String _historyFilter = '';
 
   static const List<String> _defaultElectroFirms = [
     'Судариков Петр Сергеевич',
@@ -1184,16 +1233,19 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
     _majorDateController.text = _todayFormatted();
     _platyDateController.text = _todayFormatted();
     _initApp();
-    // Автообновление списка треков каждые 3 секунды
-    _tracksWatcherTimer = Timer.periodic(
+    // Автообновление треков и истории каждые 3 секунды
+    _watcherTimer = Timer.periodic(
       const Duration(seconds: 3),
-      (_) => _loadTracksFromDisk(silent: true),
+      (_) {
+        _loadTracksFromDisk(silent: true);
+        _loadHistoryFromDisk(silent: true);
+      },
     );
   }
 
   @override
   void dispose() {
-    _tracksWatcherTimer?.cancel();
+    _watcherTimer?.cancel();
     super.dispose();
   }
 
@@ -1207,6 +1259,7 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
     await _loadFirmsFromDisk(isPlaty: false);
     await _loadFirmsFromDisk(isPlaty: true);
     await _loadTracksFromDisk(silent: true);
+    await _loadHistoryFromDisk(silent: true);
   }
 
   // На Windows работаем прямо из папки, где лежит .exe-файл
@@ -1228,6 +1281,11 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
   Future<File> _getTracksFile() async {
     final dir = await _getWorkDirPath();
     return File('$dir${Platform.pathSeparator}tracks_today.txt');
+  }
+
+  Future<File> _getHistoryFile() async {
+    final dir = await _getWorkDirPath();
+    return File('$dir${Platform.pathSeparator}major_history.jsonl');
   }
 
   Future<void> _loadTracksFromDisk({bool silent = false}) async {
@@ -1256,6 +1314,40 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
     } catch (_) {}
   }
 
+  Future<void> _loadHistoryFromDisk({bool silent = false}) async {
+    try {
+      final file = await _getHistoryFile();
+      if (!file.existsSync()) {
+        if (_historyEntries.isNotEmpty) {
+          setState(() => _historyEntries = []);
+        }
+        return;
+      }
+      final bytes = await file.readAsBytes();
+      final text = utf8.decode(bytes, allowMalformed: true);
+      final lines = text
+          .split(RegExp(r'\r?\n'))
+          .map((l) => l.trim())
+          .where((l) => l.isNotEmpty)
+          .toList();
+
+      final List<MajorHistoryEntry> parsed = [];
+      for (final line in lines.reversed) {
+        try {
+          final map = jsonDecode(line) as Map<String, dynamic>;
+          parsed.add(MajorHistoryEntry.fromJson(map));
+        } catch (_) {}
+      }
+
+      if (parsed.length != _historyEntries.length) {
+        setState(() => _historyEntries = parsed);
+      }
+      if (!silent) {
+        _showSnackbar('История обновлена (${parsed.length})');
+      }
+    } catch (_) {}
+  }
+
   Future<void> _clearTracksFile() async {
     final file = await _getTracksFile();
     if (file.existsSync()) {
@@ -1263,6 +1355,15 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
     }
     setState(() => _trackLines = []);
     _showSnackbar('Список треков очищен');
+  }
+
+  Future<void> _clearHistoryFile() async {
+    final file = await _getHistoryFile();
+    if (file.existsSync()) {
+      await file.writeAsString('', encoding: utf8);
+    }
+    setState(() => _historyEntries = []);
+    _showSnackbar('История выписок очищена');
   }
 
   Future<void> _copyText(String text, String message) async {
@@ -1400,18 +1501,22 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
   }) async {
     final workDir = await _getWorkDirPath();
     final prefix = isPlaty ? 'major_platy' : 'major_electro';
+    final companyLabel = isPlaty ? 'ООО «Печатные платы»' : 'ООО «ЭЛЕКТРОконнект»';
     final scriptPath = '$workDir${Platform.pathSeparator}${prefix}_auto.py';
 
     final pyCode = '''
 # -*- coding: utf-8 -*-
 import os
 import re
+import json
 import time
+import datetime
 import subprocess
 from playwright.sync_api import sync_playwright
 
 LOGIN = '${_escapePy(login)}'
 PASSWORD = '${_escapePy(pass)}'
+COMPANY_LABEL = '${_escapePy(companyLabel)}'
 FIRM_NAME = '${_escapePy(firm)}'
 PICKUP_DATE = '${_escapePy(date)}'
 PICKUP_TIME = '${_escapePy(time)}'
@@ -1421,8 +1526,19 @@ DESCRIPTION = '${_escapePy(desc)}'
 EXTRA_INFO = '${_escapePy(info)}'
 WORK_DIR = r'$workDir'
 
-def save_track_line(track_num):
+WEEKDAYS_RU = [
+    'Понедельник',
+    'Вторник',
+    'Среда',
+    'Четверг',
+    'Пятница',
+    'Суббота',
+    'Воскресенье',
+]
+
+def save_track_and_history(track_num):
     tracks_file = os.path.join(WORK_DIR, 'tracks_today.txt')
+    history_file = os.path.join(WORK_DIR, 'major_history.jsonl')
     line = f'{FIRM_NAME} {track_num}'.strip()
     try:
         with open(tracks_file, 'a', encoding='utf-8') as f:
@@ -1430,6 +1546,26 @@ def save_track_line(track_num):
         print('Трек сохранён:', line)
     except Exception as e:
         print('Ошибка записи трека:', e)
+
+    now = datetime.datetime.now()
+    entry = {
+        'date': now.strftime('%d.%m.%Y'),
+        'weekday': WEEKDAYS_RU[now.weekday()],
+        'time': now.strftime('%H:%M:%S'),
+        'company': COMPANY_LABEL,
+        'firm': FIRM_NAME,
+        'track': track_num,
+        'weight': WEIGHT,
+        'places': PLACES,
+        'desc': DESCRIPTION,
+        'pickup_date': PICKUP_DATE,
+        'pickup_time': PICKUP_TIME,
+    }
+    try:
+        with open(history_file, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + '\\n')
+    except Exception as e:
+        print('Ошибка записи истории:', e)
 
 def extract_track(suggested_filename, page_text):
     m = re.search(r'\\b(\\d{10})\\b', suggested_filename or '')
@@ -1461,7 +1597,7 @@ def main():
         page.wait_for_load_state('domcontentloaded')
         page.wait_for_timeout(800)
 
-        # Надёжный ввод логина и пароля (даже если поле пароля маскируется под text)
+        # Надёжный ввод логина и пароля
         visible_inputs = page.locator('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):visible')
         if visible_inputs.count() >= 2:
             login_box = visible_inputs.nth(0)
@@ -1478,12 +1614,32 @@ def main():
             page.wait_for_timeout(200)
             page.keyboard.type(PASSWORD)
 
-        page.wait_for_timeout(200)
-        submit_btn = page.locator('input[type="submit"], button:has-text("Войти"), a:has-text("Войти")').first
-        if submit_btn.count() > 0:
-            submit_btn.click()
-        else:
+        page.wait_for_timeout(300)
+
+        # Надёжное нажатие видимой кнопки "Войти" + страховка через Enter
+        clicked = False
+        for sel in [
+            'input[type="submit"]:visible',
+            'input[type="button"][value*="Войти"]:visible',
+            'button:has-text("Войти"):visible',
+            'a:has-text("Войти"):visible',
+            'text="Войти"',
+        ]:
+            loc = page.locator(sel)
+            if loc.count() > 0:
+                try:
+                    loc.first.click(timeout=5000)
+                    clicked = True
+                    break
+                except Exception:
+                    pass
+
+        if not clicked:
             page.keyboard.press('Enter')
+        else:
+            page.wait_for_timeout(500)
+            if 'login.aspx' in page.url.lower():
+                page.keyboard.press('Enter')
 
         page.wait_for_load_state('networkidle')
         page.wait_for_timeout(1200)
@@ -1533,7 +1689,7 @@ def main():
             except Exception:
                 pass
             track_num = extract_track(suggested, page_text)
-            save_track_line(track_num)
+            save_track_and_history(track_num)
 
             pdf_target = os.path.join(WORK_DIR, f'major_{track_num}_{int(time.time())}.pdf')
             download.save_as(pdf_target)
@@ -1624,7 +1780,9 @@ if __name__ == '__main__':
                       ? _buildMajorCourierWorkspace(isPlaty: false)
                       : (_selectedNav == 1
                           ? _buildMajorCourierWorkspace(isPlaty: true)
-                          : _buildTracksTab()),
+                          : (_selectedNav == 2
+                              ? _buildTracksTab()
+                              : _buildHistoryTab())),
                 ),
               ],
             ),
@@ -1657,10 +1815,17 @@ if __name__ == '__main__':
         icon: Icons.copy_all_rounded,
         color: const Color(0xFF10B981),
       ),
+      (
+        index: 3,
+        title: 'История (${_historyEntries.length})',
+        subtitle: 'Дата, день, время, трек',
+        icon: Icons.history_rounded,
+        color: const Color(0xFF38BDF8),
+      ),
     ];
 
     return Container(
-      width: 240,
+      width: 245,
       decoration: BoxDecoration(
         color: _sidebarBg,
         border: Border(right: BorderSide(color: _borderCol)),
@@ -1826,6 +1991,7 @@ if __name__ == '__main__':
       'Электроконнект — Major Express',
       'Печатные платы — Major Express',
       'Выписанные накладные (Фирма + Трек)',
+      'История выписок (Дата, день недели, время)',
     ];
     return Container(
       height: 58,
@@ -1897,7 +2063,6 @@ if __name__ == '__main__':
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Левая часть — форма заказа
           Expanded(
             flex: 6,
             child: SingleChildScrollView(
@@ -2087,7 +2252,6 @@ if __name__ == '__main__':
             ),
           ),
           const SizedBox(width: 18),
-          // Правая часть — Справочник получателей с поиском
           Expanded(
             flex: 4,
             child: Container(
@@ -2279,6 +2443,166 @@ if __name__ == '__main__':
                             tooltip: 'Копировать строку',
                             onPressed: () =>
                                 _copyText(line, 'Скопировано: $line'),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHistoryTab() {
+    final filtered = _historyFilter.isEmpty
+        ? _historyEntries
+        : _historyEntries.where((e) {
+            final q = _historyFilter.toLowerCase();
+            return e.firm.toLowerCase().contains(q) ||
+                e.track.toLowerCase().contains(q) ||
+                e.date.toLowerCase().contains(q) ||
+                e.weekday.toLowerCase().contains(q) ||
+                e.company.toLowerCase().contains(q);
+          }).toList();
+
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: _cardBg,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _borderCol),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.history_rounded,
+                    color: Color(0xFF38BDF8), size: 22),
+                const SizedBox(width: 10),
+                Text(
+                  'История выписок (${_historyEntries.length})',
+                  style: const TextStyle(
+                      fontSize: 17, fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.refresh_rounded),
+                  tooltip: 'Обновить историю',
+                  onPressed: () => _loadHistoryFromDisk(silent: false),
+                ),
+                TextButton(
+                  onPressed:
+                      _historyEntries.isEmpty ? null : _clearHistoryFile,
+                  child: const Text('Очистить историю',
+                      style: TextStyle(color: Colors.redAccent)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _historySearchController,
+              onChanged: (val) =>
+                  setState(() => _historyFilter = val.trim()),
+              decoration: InputDecoration(
+                hintText: 'Поиск по фирме, треку, дате или дню недели...',
+                hintStyle: TextStyle(fontSize: 13, color: _subtleText),
+                prefixIcon: const Icon(Icons.search, size: 19),
+                suffixIcon: _historyFilter.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear, size: 16),
+                        onPressed: () {
+                          _historySearchController.clear();
+                          setState(() => _historyFilter = '');
+                        },
+                      )
+                    : null,
+                filled: true,
+                fillColor: widget.isDark
+                    ? const Color(0xFF182235)
+                    : const Color(0xFFF8FAFC),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(color: _borderCol),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(color: _borderCol),
+                ),
+                isDense: true,
+              ),
+            ),
+            const Divider(height: 24),
+            Expanded(
+              child: filtered.isEmpty
+                  ? Center(
+                      child: Text(
+                        _historyEntries.isEmpty
+                            ? 'История выписок пока пуста.\nПосле оформления накладной здесь появится дата, день недели, время, фирма и трек.'
+                            : 'Ничего не найдено по запросу «$_historyFilter»',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: _subtleText, fontSize: 14),
+                      ),
+                    )
+                  : ListView.separated(
+                      itemCount: filtered.length,
+                      separatorBuilder: (_, __) =>
+                          Divider(height: 1, color: _borderCol),
+                      itemBuilder: (context, idx) {
+                        final item = filtered[idx];
+                        final isPlaty = item.company.contains('Печатные');
+                        final badgeColor = isPlaty
+                            ? const Color(0xFFA855F7)
+                            : const Color(0xFFF59E0B);
+                        final copyStr = '${item.firm} ${item.track}'.trim();
+
+                        return ListTile(
+                          contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 6),
+                          leading: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: badgeColor.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Icon(
+                              isPlaty
+                                  ? Icons.developer_board_rounded
+                                  : Icons.local_shipping_rounded,
+                              color: badgeColor,
+                              size: 20,
+                            ),
+                          ),
+                          title: Row(
+                            children: [
+                              Expanded(
+                                child: SelectableText(
+                                  '${item.firm}  •  ${item.track}',
+                                  style: const TextStyle(
+                                    fontSize: 14.5,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          subtitle: Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              '${item.weekday}, ${item.date} в ${item.time}  |  ${item.company}\n'
+                              'Забор: ${item.pickupDate} (${item.pickupTime})  •  ${item.weight} кг, мест: ${item.places}  •  ${item.desc}',
+                              style:
+                                  TextStyle(fontSize: 12, color: _subtleText),
+                            ),
+                          ),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.copy_rounded, size: 18),
+                            tooltip: 'Копировать «Фирма Трек»',
+                            onPressed: () =>
+                                _copyText(copyStr, 'Скопировано: $copyStr'),
                           ),
                         );
                       },
