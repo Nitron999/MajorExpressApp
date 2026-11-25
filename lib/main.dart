@@ -97,6 +97,24 @@ class MajorHistoryEntry {
     required this.pickupTime,
   });
 
+  bool get isPlaty => company.toLowerCase().contains('печатн');
+
+  String get trackLine => '$firm $track'.trim();
+
+  Map<String, dynamic> toJson() => {
+        'date': date,
+        'weekday': weekday,
+        'time': time,
+        'company': company,
+        'firm': firm,
+        'track': track,
+        'weight': weight,
+        'places': places,
+        'desc': desc,
+        'pickup_date': pickupDate,
+        'pickup_time': pickupTime,
+      };
+
   factory MajorHistoryEntry.fromJson(Map<String, dynamic> json) =>
       MajorHistoryEntry(
         date: json['date']?.toString() ?? '',
@@ -130,8 +148,13 @@ class MajorWorkspaceScreen extends StatefulWidget {
 class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
   // 0 = Электроконнект, 1 = Печатные платы, 2 = Треки, 3 = История
   int _selectedNav = 0;
+  // Переключатели компаний внутри вкладок «Треки» и «История» (false = Электроконнект, true = Печатные платы)
+  bool _tracksIsPlaty = false;
+  bool _historyIsPlaty = false;
+
   bool _sumatraFound = false;
   Timer? _watcherTimer;
+  String _lastHistoryRaw = '';
 
   // Зашитые учётки Major Express
   static const String _electroLogin = 'Electroconnect';
@@ -175,10 +198,7 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
   String _platyFirmFilter = '';
   List<String> _platyFirms = [];
 
-  // Список выписанных треков (формат: "Фирма Трек")
-  List<String> _trackLines = [];
-
-  // Подробная история выписок
+  // Подробная история выписок (используется и для «Треков по дням», и для «Истории»)
   List<MajorHistoryEntry> _historyEntries = [];
   final TextEditingController _historySearchController =
       TextEditingController();
@@ -1236,10 +1256,7 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
     // Автообновление треков и истории каждые 3 секунды
     _watcherTimer = Timer.periodic(
       const Duration(seconds: 3),
-      (_) {
-        _loadTracksFromDisk(silent: true);
-        _loadHistoryFromDisk(silent: true);
-      },
+      (_) => _loadHistoryFromDisk(silent: true),
     );
   }
 
@@ -1258,7 +1275,6 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
     await _checkSumatraPdf();
     await _loadFirmsFromDisk(isPlaty: false);
     await _loadFirmsFromDisk(isPlaty: true);
-    await _loadTracksFromDisk(silent: true);
     await _loadHistoryFromDisk(silent: true);
   }
 
@@ -1278,40 +1294,9 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
     setState(() => _sumatraFound = found);
   }
 
-  Future<File> _getTracksFile() async {
-    final dir = await _getWorkDirPath();
-    return File('$dir${Platform.pathSeparator}tracks_today.txt');
-  }
-
   Future<File> _getHistoryFile() async {
     final dir = await _getWorkDirPath();
     return File('$dir${Platform.pathSeparator}major_history.jsonl');
-  }
-
-  Future<void> _loadTracksFromDisk({bool silent = false}) async {
-    try {
-      final file = await _getTracksFile();
-      if (!file.existsSync()) {
-        if (_trackLines.isNotEmpty) {
-          setState(() => _trackLines = []);
-        }
-        return;
-      }
-      final bytes = await file.readAsBytes();
-      final text = utf8.decode(bytes, allowMalformed: true);
-      final cleaned = text
-          .split(RegExp(r'\r?\n'))
-          .map((l) => l.trim())
-          .where((l) => l.isNotEmpty)
-          .toList();
-      if (cleaned.length != _trackLines.length ||
-          cleaned.join('\n') != _trackLines.join('\n')) {
-        setState(() => _trackLines = cleaned);
-      }
-      if (!silent) {
-        _showSnackbar('Список треков обновлён (${cleaned.length})');
-      }
-    } catch (_) {}
   }
 
   Future<void> _loadHistoryFromDisk({bool silent = false}) async {
@@ -1319,12 +1304,17 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
       final file = await _getHistoryFile();
       if (!file.existsSync()) {
         if (_historyEntries.isNotEmpty) {
-          setState(() => _historyEntries = []);
+          setState(() {
+            _lastHistoryRaw = '';
+            _historyEntries = [];
+          });
         }
         return;
       }
       final bytes = await file.readAsBytes();
       final text = utf8.decode(bytes, allowMalformed: true);
+      if (text == _lastHistoryRaw && silent) return;
+
       final lines = text
           .split(RegExp(r'\r?\n'))
           .map((l) => l.trim())
@@ -1339,31 +1329,35 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
         } catch (_) {}
       }
 
-      if (parsed.length != _historyEntries.length) {
-        setState(() => _historyEntries = parsed);
-      }
+      setState(() {
+        _lastHistoryRaw = text;
+        _historyEntries = parsed;
+      });
       if (!silent) {
-        _showSnackbar('История обновлена (${parsed.length})');
+        _showSnackbar('Данные обновлены (${parsed.length})');
       }
     } catch (_) {}
   }
 
-  Future<void> _clearTracksFile() async {
-    final file = await _getTracksFile();
-    if (file.existsSync()) {
-      await file.writeAsString('', encoding: utf8);
-    }
-    setState(() => _trackLines = []);
-    _showSnackbar('Список треков очищен');
-  }
-
-  Future<void> _clearHistoryFile() async {
+  Future<void> _clearCompanyHistory({required bool isPlaty}) async {
     final file = await _getHistoryFile();
-    if (file.existsSync()) {
-      await file.writeAsString('', encoding: utf8);
-    }
-    setState(() => _historyEntries = []);
-    _showSnackbar('История выписок очищена');
+    final remaining = _historyEntries
+        .where((e) => e.isPlaty != isPlaty)
+        .toList()
+        .reversed
+        .toList();
+    final newContent =
+        remaining.map((e) => jsonEncode(e.toJson())).join('\n');
+    await file.writeAsString(
+      newContent.isEmpty ? '' : '$newContent\n',
+      encoding: utf8,
+    );
+    await _loadHistoryFromDisk(silent: true);
+    _showSnackbar(
+      isPlaty
+          ? 'История ООО«Печатные платы» очищена'
+          : 'История ООО «ЭЛЕКТРОконнект» очищена',
+    );
   }
 
   Future<void> _copyText(String text, String message) async {
@@ -1874,6 +1868,110 @@ if __name__ == '__main__':
     );
   }
 
+  Widget _buildCompanySwitcher({
+    required bool isPlatySelected,
+    required int electroCount,
+    required int platyCount,
+    required ValueChanged<bool> onSelect,
+  }) {
+    const electroColor = Color(0xFFF59E0B);
+    const platyColor = Color(0xFFA855F7);
+
+    return Row(
+      children: [
+        Expanded(
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: () => onSelect(false),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: !isPlatySelected
+                    ? electroColor.withOpacity(0.16)
+                    : (widget.isDark
+                        ? const Color(0xFF182235)
+                        : const Color(0xFFF8FAFC)),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: !isPlatySelected ? electroColor : _borderCol,
+                  width: !isPlatySelected ? 1.5 : 1,
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.local_shipping_rounded,
+                    size: 18,
+                    color: !isPlatySelected ? electroColor : _subtleText,
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      'ООО «ЭЛЕКТРОконнект» ($electroCount)',
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: !isPlatySelected
+                            ? FontWeight.bold
+                            : FontWeight.w500,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: () => onSelect(true),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: isPlatySelected
+                    ? platyColor.withOpacity(0.16)
+                    : (widget.isDark
+                        ? const Color(0xFF182235)
+                        : const Color(0xFFF8FAFC)),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: isPlatySelected ? platyColor : _borderCol,
+                  width: isPlatySelected ? 1.5 : 1,
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.developer_board_rounded,
+                    size: 18,
+                    color: isPlatySelected ? platyColor : _subtleText,
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      'ООО«Печатные платы» ($platyCount)',
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: isPlatySelected
+                            ? FontWeight.bold
+                            : FontWeight.w500,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1902,6 +2000,7 @@ if __name__ == '__main__':
   }
 
   Widget _buildSidebar() {
+    final totalCount = _historyEntries.length;
     final navItems = [
       (
         index: 0,
@@ -1919,15 +2018,15 @@ if __name__ == '__main__':
       ),
       (
         index: 2,
-        title: 'Треки (${_trackLines.length})',
-        subtitle: 'Копировать фирмы и треки',
+        title: 'Треки ($totalCount)',
+        subtitle: 'По компаниям и дням',
         icon: Icons.copy_all_rounded,
         color: const Color(0xFF10B981),
       ),
       (
         index: 3,
-        title: 'История (${_historyEntries.length})',
-        subtitle: 'Дата, день, время, трек',
+        title: 'История ($totalCount)',
+        subtitle: 'Две истории по компаниям',
         icon: Icons.history_rounded,
         color: const Color(0xFF38BDF8),
       ),
@@ -2099,8 +2198,8 @@ if __name__ == '__main__':
     const titles = [
       'Электроконнект — Major Express',
       'Печатные платы — Major Express',
-      'Выписанные накладные (Фирма + Трек)',
-      'История выписок (Дата, день недели, время)',
+      'Треки по дням (Фирма + Трек)',
+      'История выписок (по компаниям)',
     ];
     return Container(
       height: 58,
@@ -2473,6 +2572,21 @@ if __name__ == '__main__':
   }
 
   Widget _buildTracksTab() {
+    final electroAll = _historyEntries.where((e) => !e.isPlaty).toList();
+    final platyAll = _historyEntries.where((e) => e.isPlaty).toList();
+    final companyEntries = _tracksIsPlaty ? platyAll : electroAll;
+
+    // Группируем по дням (от свежих дней к старым; внутри дня — по порядку выписки)
+    final Map<String, List<MajorHistoryEntry>> groupedByDay = {};
+    for (final entry in companyEntries.reversed) {
+      final dayKey =
+          '${entry.weekday.isNotEmpty ? "${entry.weekday}, " : ""}${entry.date}';
+      groupedByDay.putIfAbsent(dayKey, () => []).add(entry);
+    }
+    final dayKeys = groupedByDay.keys.toList().reversed.toList();
+    final allCompanyLines =
+        companyEntries.reversed.map((e) => e.trackLine).toList();
+
     return Padding(
       padding: const EdgeInsets.all(20),
       child: Container(
@@ -2485,17 +2599,28 @@ if __name__ == '__main__':
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            _buildCompanySwitcher(
+              isPlatySelected: _tracksIsPlaty,
+              electroCount: electroAll.length,
+              platyCount: platyAll.length,
+              onSelect: (isPlaty) => setState(() => _tracksIsPlaty = isPlaty),
+            ),
+            const SizedBox(height: 16),
             Row(
               children: [
                 const Icon(Icons.receipt_long_rounded,
                     color: Color(0xFF10B981), size: 22),
                 const SizedBox(width: 10),
-                Text(
-                  'Выписанные накладные (${_trackLines.length})',
-                  style: const TextStyle(
-                      fontSize: 17, fontWeight: FontWeight.bold),
+                Expanded(
+                  child: Text(
+                    _tracksIsPlaty
+                        ? 'Треки ООО«Печатные платы» (${companyEntries.length})'
+                        : 'Треки ООО «ЭЛЕКТРОконнект» (${companyEntries.length})',
+                    style: const TextStyle(
+                        fontSize: 16.5, fontWeight: FontWeight.bold),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
-                const Spacer(),
                 ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF10B981),
@@ -2503,55 +2628,113 @@ if __name__ == '__main__':
                   ),
                   icon: const Icon(Icons.copy_all_rounded, size: 18),
                   label: const Text('КОПИРОВАТЬ ВСЁ'),
-                  onPressed: _trackLines.isEmpty
+                  onPressed: allCompanyLines.isEmpty
                       ? null
                       : () => _copyText(
-                            _trackLines.join('\n'),
-                            'Скопированы все ${_trackLines.length} строк!',
+                            allCompanyLines.join('\n'),
+                            'Скопированы все ${allCompanyLines.length} строк!',
                           ),
                 ),
                 const SizedBox(width: 8),
                 IconButton(
                   icon: const Icon(Icons.refresh_rounded),
-                  tooltip: 'Обновить из tracks_today.txt',
-                  onPressed: () => _loadTracksFromDisk(silent: false),
-                ),
-                TextButton(
-                  onPressed: _trackLines.isEmpty ? null : _clearTracksFile,
-                  child: const Text('Очистить',
-                      style: TextStyle(color: Colors.redAccent)),
+                  tooltip: 'Обновить список треков',
+                  onPressed: () => _loadHistoryFromDisk(silent: false),
                 ),
               ],
             ),
-            const Divider(height: 24),
+            const Divider(height: 22),
             Expanded(
-              child: _trackLines.isEmpty
+              child: dayKeys.isEmpty
                   ? Center(
                       child: Text(
-                        'После выписки накладных здесь автоматически появятся строки вида:\nООО "Галс плюс" 2071839662',
+                        'Для этой компании выписанных треков пока нет.\nПосле оформления накладной треки появятся здесь по дням.',
                         textAlign: TextAlign.center,
                         style: TextStyle(color: _subtleText, fontSize: 14),
                       ),
                     )
-                  : ListView.separated(
-                      itemCount: _trackLines.length,
-                      separatorBuilder: (_, __) =>
-                          Divider(height: 1, color: _borderCol),
+                  : ListView.builder(
+                      itemCount: dayKeys.length,
                       itemBuilder: (context, idx) {
-                        final line = _trackLines[idx];
-                        return ListTile(
-                          title: SelectableText(
-                            line,
-                            style: const TextStyle(
-                              fontSize: 15.5,
-                              fontWeight: FontWeight.w700,
-                            ),
+                        final dayLabel = dayKeys[idx];
+                        final dayItems = groupedByDay[dayLabel]!;
+                        final dayCopyText =
+                            dayItems.map((e) => e.trackLine).join('\n');
+
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 14),
+                          decoration: BoxDecoration(
+                            color: widget.isDark
+                                ? const Color(0xFF182235)
+                                : const Color(0xFFF8FAFC),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: _borderCol),
                           ),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.copy_rounded, size: 18),
-                            tooltip: 'Копировать строку',
-                            onPressed: () =>
-                                _copyText(line, 'Скопировано: $line'),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(14, 10, 12, 10),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.calendar_today_rounded,
+                                        size: 16, color: Color(0xFF10B981)),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        '$dayLabel  (${dayItems.length} шт.)',
+                                        style: const TextStyle(
+                                          fontSize: 14.5,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                    ElevatedButton.icon(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor:
+                                            const Color(0xFF10B981),
+                                        foregroundColor: Colors.white,
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 12, vertical: 8),
+                                        textStyle: const TextStyle(
+                                            fontSize: 12.5,
+                                            fontWeight: FontWeight.bold),
+                                      ),
+                                      icon: const Icon(Icons.copy_all_rounded,
+                                          size: 16),
+                                      label:
+                                          const Text('КОПИРОВАТЬ ВСЁ ЗА ДЕНЬ'),
+                                      onPressed: () => _copyText(
+                                        dayCopyText,
+                                        'Скопированы все ${dayItems.length} накладных за $dayLabel!',
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Divider(height: 1, color: _borderCol),
+                              ...dayItems.map((item) {
+                                final line = item.trackLine;
+                                return ListTile(
+                                  dense: true,
+                                  title: SelectableText(
+                                    line,
+                                    style: const TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  trailing: IconButton(
+                                    icon: const Icon(Icons.copy_rounded,
+                                        size: 17),
+                                    tooltip: 'Копировать строку',
+                                    onPressed: () =>
+                                        _copyText(line, 'Скопировано: $line'),
+                                  ),
+                                );
+                              }),
+                            ],
                           ),
                         );
                       },
@@ -2564,16 +2747,22 @@ if __name__ == '__main__':
   }
 
   Widget _buildHistoryTab() {
+    final electroAll = _historyEntries.where((e) => !e.isPlaty).toList();
+    final platyAll = _historyEntries.where((e) => e.isPlaty).toList();
+    final companyEntries = _historyIsPlaty ? platyAll : electroAll;
+
     final filtered = _historyFilter.isEmpty
-        ? _historyEntries
-        : _historyEntries.where((e) {
+        ? companyEntries
+        : companyEntries.where((e) {
             final q = _historyFilter.toLowerCase();
             return e.firm.toLowerCase().contains(q) ||
                 e.track.toLowerCase().contains(q) ||
                 e.date.toLowerCase().contains(q) ||
-                e.weekday.toLowerCase().contains(q) ||
-                e.company.toLowerCase().contains(q);
+                e.weekday.toLowerCase().contains(q);
           }).toList();
+
+    final badgeColor =
+        _historyIsPlaty ? const Color(0xFFA855F7) : const Color(0xFFF59E0B);
 
     return Padding(
       padding: const EdgeInsets.all(20),
@@ -2587,26 +2776,55 @@ if __name__ == '__main__':
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            _buildCompanySwitcher(
+              isPlatySelected: _historyIsPlaty,
+              electroCount: electroAll.length,
+              platyCount: platyAll.length,
+              onSelect: (isPlaty) => setState(() => _historyIsPlaty = isPlaty),
+            ),
+            const SizedBox(height: 16),
             Row(
               children: [
                 const Icon(Icons.history_rounded,
                     color: Color(0xFF38BDF8), size: 22),
                 const SizedBox(width: 10),
-                Text(
-                  'История выписок (${_historyEntries.length})',
-                  style: const TextStyle(
-                      fontSize: 17, fontWeight: FontWeight.bold),
+                Expanded(
+                  child: Text(
+                    _historyIsPlaty
+                        ? 'История ООО«Печатные платы» (${companyEntries.length})'
+                        : 'История ООО «ЭЛЕКТРОконнект» (${companyEntries.length})',
+                    style: const TextStyle(
+                        fontSize: 16.5, fontWeight: FontWeight.bold),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
-                const Spacer(),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF10B981),
+                    foregroundColor: Colors.white,
+                  ),
+                  icon: const Icon(Icons.copy_all_rounded, size: 18),
+                  label: const Text('КОПИРОВАТЬ ВСЁ'),
+                  onPressed: filtered.isEmpty
+                      ? null
+                      : () => _copyText(
+                            filtered.reversed
+                                .map((e) => e.trackLine)
+                                .join('\n'),
+                            'Скопированы все ${filtered.length} строк!',
+                          ),
+                ),
+                const SizedBox(width: 6),
                 IconButton(
                   icon: const Icon(Icons.refresh_rounded),
                   tooltip: 'Обновить историю',
                   onPressed: () => _loadHistoryFromDisk(silent: false),
                 ),
                 TextButton(
-                  onPressed:
-                      _historyEntries.isEmpty ? null : _clearHistoryFile,
-                  child: const Text('Очистить историю',
+                  onPressed: companyEntries.isEmpty
+                      ? null
+                      : () => _clearCompanyHistory(isPlaty: _historyIsPlaty),
+                  child: const Text('Очистить',
                       style: TextStyle(color: Colors.redAccent)),
                 ),
               ],
@@ -2644,13 +2862,13 @@ if __name__ == '__main__':
                 isDense: true,
               ),
             ),
-            const Divider(height: 24),
+            const Divider(height: 22),
             Expanded(
               child: filtered.isEmpty
                   ? Center(
                       child: Text(
-                        _historyEntries.isEmpty
-                            ? 'История выписок пока пуста.\nПосле оформления накладной здесь появится дата, день недели, время, фирма и трек.'
+                        companyEntries.isEmpty
+                            ? 'История выписок для этой компании пока пуста.'
                             : 'Ничего не найдено по запросу «$_historyFilter»',
                         textAlign: TextAlign.center,
                         style: TextStyle(color: _subtleText, fontSize: 14),
@@ -2662,11 +2880,7 @@ if __name__ == '__main__':
                           Divider(height: 1, color: _borderCol),
                       itemBuilder: (context, idx) {
                         final item = filtered[idx];
-                        final isPlaty = item.company.contains('Печатные');
-                        final badgeColor = isPlaty
-                            ? const Color(0xFFA855F7)
-                            : const Color(0xFFF59E0B);
-                        final copyStr = '${item.firm} ${item.track}'.trim();
+                        final copyStr = item.trackLine;
 
                         return ListTile(
                           contentPadding: const EdgeInsets.symmetric(
@@ -2678,25 +2892,19 @@ if __name__ == '__main__':
                               borderRadius: BorderRadius.circular(10),
                             ),
                             child: Icon(
-                              isPlaty
+                              _historyIsPlaty
                                   ? Icons.developer_board_rounded
                                   : Icons.local_shipping_rounded,
                               color: badgeColor,
                               size: 20,
                             ),
                           ),
-                          title: Row(
-                            children: [
-                              Expanded(
-                                child: SelectableText(
-                                  '${item.firm}  •  ${item.track}',
-                                  style: const TextStyle(
-                                    fontSize: 14.5,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                            ],
+                          title: SelectableText(
+                            '${item.firm}  •  ${item.track}',
+                            style: const TextStyle(
+                              fontSize: 14.5,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                           subtitle: Padding(
                             padding: const EdgeInsets.only(top: 4),
