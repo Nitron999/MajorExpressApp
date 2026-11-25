@@ -139,7 +139,7 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
   static const String _platyLogin = 'Palat';
   static const String _platyPass = 'Z250121e9a7a762';
 
-  // Электроконнект
+  // Электроконнект (основание — УПД)
   final TextEditingController _majorFirmController = TextEditingController();
   final TextEditingController _majorDateController = TextEditingController();
   final TextEditingController _majorTimeController =
@@ -157,7 +157,7 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
   String _majorFirmFilter = '';
   List<String> _electroFirms = [];
 
-  // Печатные платы
+  // Печатные платы (основание — С/Ч)
   final TextEditingController _platyFirmController = TextEditingController();
   final TextEditingController _platyDateController = TextEditingController();
   final TextEditingController _platyTimeController =
@@ -169,7 +169,7 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
   final TextEditingController _platyDescController =
       TextEditingController(text: 'платы');
   final TextEditingController _platyInfoController =
-      TextEditingController(text: 'УПД');
+      TextEditingController(text: 'С/Ч');
   final TextEditingController _platyFirmSearchController =
       TextEditingController();
   String _platyFirmFilter = '';
@@ -1501,7 +1501,7 @@ class _MajorWorkspaceScreenState extends State<MajorWorkspaceScreen> {
   }) async {
     final workDir = await _getWorkDirPath();
     final prefix = isPlaty ? 'major_platy' : 'major_electro';
-    final companyLabel = isPlaty ? 'ООО «Печатные платы»' : 'ООО «ЭЛЕКТРОконнект»';
+    final companyLabel = isPlaty ? 'ООО«Печатные платы»' : 'ООО «ЭЛЕКТРОконнект»';
     final scriptPath = '$workDir${Platform.pathSeparator}${prefix}_auto.py';
 
     final pyCode = '''
@@ -1643,18 +1643,33 @@ def main():
 
             print('2. Заполняю данные...')
 
-            # 1. ОТПРАВИТЕЛЬ (для Электроконнекта всегда строго Москва)
-            if not IS_PLATY:
+            # 1. ОТПРАВИТЕЛЬ
+            shipper_inp = page.locator('#ctl00_MainPlaceHolder_o_cs_ddlListShippers_I')
+            shipper_inp.click()
+            shipper_inp.press('ControlOrMeta+A')
+            shipper_inp.press('Backspace')
+
+            if IS_PLATY:
+                print('-> Фиксирую отправителя: ООО«Печатные платы»...')
+                shipper_inp.fill('ООО«Печатные платы»')
+                page.wait_for_timeout(1800)
+                dropdown_shipper = page.locator("[id*='ctl00_MainPlaceHolder_o_cs_ddlListShippers_DDD']")
+                try:
+                    dropdown_shipper.locator('tr').filter(has_text='Печатные платы').first.click(timeout=4000)
+                except Exception:
+                    page.keyboard.press('ArrowDown')
+                    page.keyboard.press('Enter')
+            else:
                 print('-> Фиксирую отправителя: ООО «ЭЛЕКТРОконнект» Москва...')
-                shipper_inp = page.locator('#ctl00_MainPlaceHolder_o_cs_ddlListShippers_I')
-                shipper_inp.click()
-                shipper_inp.press('ControlOrMeta+A')
-                shipper_inp.press('Backspace')
                 shipper_inp.fill('ООО «ЭЛЕКТРОконнект» Москва')
-                page.wait_for_timeout(1500)
-                page.keyboard.press('ArrowDown')
-                page.keyboard.press('Enter')
-                page.wait_for_timeout(1000)
+                page.wait_for_timeout(1800)
+                dropdown_shipper = page.locator("[id*='ctl00_MainPlaceHolder_o_cs_ddlListShippers_DDD']")
+                try:
+                    dropdown_shipper.locator('tr').filter(has_text='Москва').first.click(timeout=4000)
+                except Exception:
+                    page.keyboard.press('ArrowDown')
+                    page.keyboard.press('Enter')
+            page.wait_for_timeout(1000)
 
             # 2. ПОЛУЧАТЕЛЬ
             print(f'-> Вбиваю получателя: {FIRM_NAME}...')
@@ -1663,9 +1678,13 @@ def main():
             consignee_inp.press('ControlOrMeta+A')
             consignee_inp.press('Backspace')
             consignee_inp.fill(FIRM_NAME)
-            page.wait_for_timeout(1500)
-            page.keyboard.press('ArrowDown')
-            page.keyboard.press('Enter')
+            page.wait_for_timeout(1800)
+            dropdown_consignee = page.locator("[id*='ctl00_MainPlaceHolder_o_cc_ddlConsignee_DDD']")
+            try:
+                dropdown_consignee.locator('tr').filter(has_text=FIRM_NAME).first.click(timeout=3000)
+            except Exception:
+                page.keyboard.press('ArrowDown')
+                page.keyboard.press('Enter')
             page.wait_for_timeout(1000)
 
             # 3. Дата забора
@@ -1706,6 +1725,7 @@ def main():
             desc_inp.fill(DESCRIPTION or 'платы')
             page.keyboard.press('Enter')
 
+            # Примечание (основание): УПД для Электроконнекта, С/Ч для Печатных плат
             if EXTRA_INFO:
                 rem_inp = page.locator('#ctl00_MainPlaceHolder_o_tbRem')
                 rem_inp.fill(EXTRA_INFO)
@@ -1744,7 +1764,6 @@ def main():
             printed = False
             pdf_temp_path = os.path.join(tempfile.gettempdir(), f'major_{track_num or "doc"}_{int(time.time())}.pdf')
 
-            # Пробуем поймать прямое скачивание PDF или новую вкладку с PDF
             try:
                 with page.expect_download(timeout=10000) as download_info:
                     page.get_by_role('button', name='Печать', exact=True).click()
@@ -1754,7 +1773,6 @@ def main():
                 download.save_as(pdf_temp_path)
                 printed = print_pdf_silent(pdf_temp_path)
             except Exception:
-                # Если не скачалось напрямую — проверяем, открылась ли вкладка с PDF
                 page.wait_for_timeout(2000)
                 for p_tab in context.pages:
                     if p_tab != page:
@@ -2190,7 +2208,7 @@ if __name__ == '__main__':
                             children: [
                               Text(
                                 isPlaty
-                                    ? 'ООО «Печатные платы» — Major Express'
+                                    ? 'ООО«Печатные платы» — Major Express'
                                     : 'ООО «ЭЛЕКТРОконнект» — Major Express',
                                 style: const TextStyle(
                                   fontSize: 17.5,
@@ -2199,7 +2217,7 @@ if __name__ == '__main__':
                               ),
                               Text(
                                 isPlaty
-                                    ? 'Отправитель: ООО «Печатные платы» • Логин: $_platyLogin • Автопечать А4'
+                                    ? 'Отправитель: ООО«Печатные платы» • Логин: $_platyLogin • Автопечать А4'
                                     : 'Отправитель: ООО «ЭЛЕКТРОконнект» Москва • Логин: $_electroLogin • Автопечать А4',
                                 style: TextStyle(
                                     fontSize: 11.5, color: _subtleText),
